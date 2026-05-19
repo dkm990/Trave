@@ -165,9 +165,10 @@ async def get_flight_status(
 
 @status_router.get("", response_model=list[FlightOut])
 async def list_all_flights(
+    user: User = Depends(current_user),
     session=Depends(db_session),
 ):
-    """Get all flights across trips for the read-only flights overview."""
+    """Get all flights for the current user across all trips."""
     svc = FlightService(session, _provider)
-    rows = await svc.list_all()
+    rows = await svc.list_for_user(user.id)
     return [_flight_out(flight, trip_title) for flight, trip_title in rows]
