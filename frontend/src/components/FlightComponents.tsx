@@ -180,7 +180,7 @@ export function AddFlightModal({
       });
     } catch (e) {
       const raw = (e as Error).message;
-      setError(raw.includes("FLIGHT_NOT_FOUND") ? "Рейс не найден. Проверьте номер и дату." : raw);
+      setError(raw.includes("FLIGHT_NOT_FOUND") ? "Рейс не найден. Проверьте номер и дату." : raw.includes("FLIGHT_PROVIDER") ? "Источник данных временно недоступен" : raw);
     } finally {
       setSubmitting(false);
     }

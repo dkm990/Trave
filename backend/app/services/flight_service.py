@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.models.flight import FlightInfo
 from app.models.trip import Trip, TripMember
 from app.services.aviation.base import BaseFlightProvider
@@ -55,19 +56,25 @@ class FlightService:
         return await self._session.get(FlightInfo, flight_id)
 
     async def refresh_status(self, flight_id: int) -> Optional[FlightInfo]:
-        """Pull latest status from provider and update DB row."""
+        """Pull latest status from provider, with free-tier refresh guards."""
         flight = await self.get(flight_id)
         if flight is None or self._provider is None:
             return flight
+        if flight.status in {"arrived", "cancelled"}:
+            return flight
 
         now = datetime.utcnow()
+        min_age = timedelta(seconds=get_settings().flight_refresh_min_seconds)
+        if flight.updated_at and now - flight.updated_at < min_age:
+            return flight
+
         result = await self._provider.lookup(
             flight_number=flight.flight_number,
             date=flight.scheduled_departure_at or now,
         )
 
         if result:
-            flight.status = result.status
+            flight.status = result.status or flight.status
             flight.departure_terminal = result.departure_terminal or flight.departure_terminal
             flight.arrival_terminal = result.arrival_terminal or flight.arrival_terminal
             flight.actual_departure_at = result.actual_departure_at or flight.actual_departure_at
@@ -77,7 +84,6 @@ class FlightService:
             flight.check_in_counter = result.check_in_counter or flight.check_in_counter
             flight.gate = result.gate or flight.gate
             flight.baggage_belt = result.baggage_belt or flight.baggage_belt
-
-        flight.updated_at = now
-        await self._session.flush()
+            flight.updated_at = now
+            await self._session.flush()
         return flight

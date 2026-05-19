@@ -11,8 +11,9 @@ from app.models.flight import FlightInfo
 from app.models.trip import Trip
 from app.models.user import User
 from app.schemas.common import FlightCreateRequest, FlightOut
-from app.services.aviation import MockFlightProvider
+from app.services.aviation import ProviderConfigurationError, ProviderRateLimitError, get_flight_provider
 from app.services.flight_service import FlightService
+from app.services.aviation.utils import normalize_flight_number
 from app.services.trip_service import TripService
 
 router = APIRouter(tags=["flights"])
@@ -20,7 +21,7 @@ flight_router = APIRouter(prefix="/api/trips/{trip_id}/flights", tags=["flights"
 status_router = APIRouter(prefix="/api/flights", tags=["flights"])
 
 # Single shared provider instance
-_provider = MockFlightProvider()
+_provider = get_flight_provider()
 
 
 def _flight_out(flight: FlightInfo, trip_title: str) -> dict:
@@ -29,7 +30,7 @@ def _flight_out(flight: FlightInfo, trip_title: str) -> dict:
         "id": flight.id,
         "trip_id": flight.trip_id,
         "trip_title": trip_title,
-        "flight_number": flight.flight_number,
+        "flight_number": normalize_flight_number(flight.flight_number),
         "airline_code": flight.airline_code,
         "airline_name": flight.airline_name,
         "departure_city": flight.departure_city,
@@ -93,10 +94,27 @@ async def add_flight(
     # Try provider lookup to fill missing fields
     provider_result = None
     if _provider:
-        provider_result = await _provider.lookup(
-            flight_number=payload.flight_number,
-            date=lookup_date,
-        )
+        try:
+            provider_result = await _provider.lookup(
+                flight_number=normalize_flight_number(payload.flight_number),
+                date=lookup_date,
+            )
+        except ProviderConfigurationError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "FLIGHT_PROVIDER_UNAVAILABLE",
+                    "message": "Источник данных временно недоступен",
+                },
+            ) from exc
+        except ProviderRateLimitError as exc:
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "code": "FLIGHT_PROVIDER_RATE_LIMITED",
+                    "message": "Источник данных временно недоступен",
+                },
+            ) from exc
 
     # MVP mode: if no explicit route data provided, require provider result
     is_mvp_mode = not payload.airline_code and not payload.departure_airport
@@ -115,7 +133,7 @@ async def add_flight(
     flight = FlightInfo(
         trip_id=trip_id,
         created_by_user_id=user.id,
-        flight_number=payload.flight_number,
+        flight_number=normalize_flight_number(payload.flight_number),
         airline_code=airline_code,
         airline_name=payload.airline_name or (provider_result.airline_name if provider_result else None),
         departure_city=payload.departure_city or (provider_result.departure_city if provider_result else "") or "—",
@@ -138,10 +156,6 @@ async def add_flight(
     )
     session.add(flight)
     await session.flush()
-
-    # Refresh full status from provider
-    svc = FlightService(session, _provider)
-    await svc.refresh_status(flight.id)
 
     return _flight_out(flight, trip.title)
 

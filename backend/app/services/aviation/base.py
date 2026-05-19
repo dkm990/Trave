@@ -8,6 +8,14 @@ from datetime import datetime
 from typing import Optional
 
 
+class ProviderConfigurationError(Exception):
+    """Raised when a provider is selected but not configured."""
+
+
+class ProviderRateLimitError(Exception):
+    """Raised when a provider rate limit is reached."""
+
+
 @dataclass
 class FlightLookupResult:
     """Normalized flight data returned by any provider."""

@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     default_base_currency: str = "RUB"
     exchangerate_api_key: str = ""
 
+    # Flights
+    flight_provider: str = "mock"
+    aerodatabox_api_key: str = ""
+    aerodatabox_api_host: str = "aerodatabox.p.rapidapi.com"
+    flight_provider_cache_ttl_seconds: int = 300
+    flight_refresh_min_seconds: int = 300
+
     # AI
     ai_provider: str = "rule_based"
     ai_fallback_provider: str = "rule_based"

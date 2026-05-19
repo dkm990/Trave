@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from app.services.aviation.base import BaseFlightProvider, FlightLookupResult
+from app.services.aviation.utils import normalize_flight_number
 
 
 # Demo flights for testing various states
@@ -101,7 +102,7 @@ class MockFlightProvider(BaseFlightProvider):
     """Returns hardcoded demo data. No external API calls."""
 
     async def lookup(self, flight_number: str, date: datetime) -> Optional[FlightLookupResult]:
-        key = flight_number.upper().replace(" ", "")
+        key = normalize_flight_number(flight_number)
         return _MOCK_FLIGHTS.get(key)
 
     async def get_status(self, flight_number: str, date: datetime) -> Optional[FlightLookupResult]:
