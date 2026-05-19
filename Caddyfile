@@ -13,7 +13,7 @@
 {$MINI_APP_DOMAIN:localhost} {
 
 	@blocked_sensitive_paths {
-		path /.env* /.git* /phpinfo.php /info.php /server-status* /server-info* /service-account.json /credentials.json /key.json
+		path /.env /.env.* /.env/* /.git /.git/* /.git/config /phpinfo.php /_phpinfo.php /info.php /server-status* /server-info* /service-account.json /credentials.json /key.json
 	}
 	handle @blocked_sensitive_paths {
 		respond 404
