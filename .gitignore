@@ -44,3 +44,14 @@ logs/
 
 # Alembic local
 backend/alembic/versions/__pycache__/
+
+# Local runtime, secrets, and generated artifacts
+.env.*
+backend/.env
+backend/.env.*
+!backend/.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+frontend/dist/
+*.tsbuildinfo

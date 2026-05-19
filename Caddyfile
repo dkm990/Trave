@@ -11,6 +11,11 @@
 # ============================================================================
 
 {$MINI_APP_DOMAIN:localhost} {
+
+  @blocked_sensitive_paths {
+    path /.env* /.git* /phpinfo.php /info.php /server-status* /server-info* /service-account.json /credentials.json /key.json
+  }
+  respond @blocked_sensitive_paths 404
 	encode zstd gzip
 
 	# Backend API

@@ -59,6 +59,8 @@ services:
     volumes:
       - yo_data:/app/data
     command: ["python", "run_bot.py"]
+    healthcheck:
+      disable: true
     networks:
       - yo_net
 
