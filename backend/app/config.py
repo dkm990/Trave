@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     aerodatabox_api_key: str = ""
     aerodatabox_api_host: str = "aerodatabox.p.rapidapi.com"
     flight_provider_cache_ttl_seconds: int = 300
-    flight_refresh_min_seconds: int = 300
+    flight_refresh_min_seconds: int = 600
 
     # AI
     ai_provider: str = "rule_based"

@@ -180,7 +180,17 @@ export function AddFlightModal({
       });
     } catch (e) {
       const raw = (e as Error).message;
-      setError(raw.includes("FLIGHT_NOT_FOUND") ? "Рейс не найден. Проверьте номер и дату." : raw.includes("FLIGHT_PROVIDER") ? "Источник данных временно недоступен" : raw);
+      setError(
+        raw.includes("FLIGHT_ALREADY_EXISTS")
+          ? "Этот рейс уже добавлен"
+          : raw.includes("FLIGHT_PROVIDER_RATE_LIMITED")
+            ? "Источник данных временно ограничил запросы. Попробуйте позже."
+            : raw.includes("FLIGHT_NOT_FOUND")
+              ? "Рейс не найден. Проверьте номер и дату."
+              : raw.includes("FLIGHT_PROVIDER")
+                ? "Источник данных временно недоступен"
+                : raw
+      );
     } finally {
       setSubmitting(false);
     }

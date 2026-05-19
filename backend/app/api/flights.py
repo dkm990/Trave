@@ -90,13 +90,29 @@ async def add_flight(
         if payload.flight_date
         else payload.scheduled_departure_at or datetime.utcnow()
     )
+    normalized_flight_number = normalize_flight_number(payload.flight_number)
+    svc = FlightService(session, _provider)
+    # Duplicate policy: return 409 instead of reusing or creating a second row.
+    existing = await svc.find_existing(
+        trip_id=trip_id,
+        flight_number=normalized_flight_number,
+        flight_date=lookup_date,
+    )
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "FLIGHT_ALREADY_EXISTS",
+                "message": "Этот рейс уже добавлен",
+            },
+        )
 
     # Try provider lookup to fill missing fields
     provider_result = None
     if _provider:
         try:
             provider_result = await _provider.lookup(
-                flight_number=normalize_flight_number(payload.flight_number),
+                flight_number=normalized_flight_number,
                 date=lookup_date,
             )
         except ProviderConfigurationError as exc:
@@ -112,7 +128,7 @@ async def add_flight(
                 status_code=429,
                 detail={
                     "code": "FLIGHT_PROVIDER_RATE_LIMITED",
-                    "message": "Источник данных временно недоступен",
+                    "message": "Источник данных временно ограничил запросы. Попробуйте позже.",
                 },
             ) from exc
 
@@ -133,7 +149,7 @@ async def add_flight(
     flight = FlightInfo(
         trip_id=trip_id,
         created_by_user_id=user.id,
-        flight_number=normalize_flight_number(payload.flight_number),
+        flight_number=normalized_flight_number,
         airline_code=airline_code,
         airline_name=payload.airline_name or (provider_result.airline_name if provider_result else None),
         departure_city=payload.departure_city or (provider_result.departure_city if provider_result else "") or "—",
@@ -153,6 +169,7 @@ async def add_flight(
             or lookup_date
         ),
         status=provider_result.status if provider_result else "scheduled",
+        updated_at=datetime.utcnow(),
     )
     session.add(flight)
     await session.flush()
@@ -168,7 +185,16 @@ async def get_flight_status(
 ):
     """Get latest status for a single flight (with provider refresh)."""
     svc = FlightService(session, _provider)
-    flight = await svc.refresh_status(flight_id)
+    try:
+        flight = await svc.refresh_status(flight_id)
+    except ProviderRateLimitError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "FLIGHT_PROVIDER_RATE_LIMITED",
+                "message": "Источник данных временно ограничил запросы. Попробуйте позже.",
+            },
+        ) from exc
     if flight is None:
         raise HTTPException(404, "Flight not found")
     trip = await TripService(session).get_trip(flight.trip_id)

@@ -5,13 +5,13 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.models.flight import FlightInfo
 from app.models.trip import Trip, TripMember
-from app.services.aviation.base import BaseFlightProvider
+from app.services.aviation.base import BaseFlightProvider, ProviderRateLimitError
 
 
 class FlightService:
@@ -55,6 +55,26 @@ class FlightService:
     async def get(self, flight_id: int) -> Optional[FlightInfo]:
         return await self._session.get(FlightInfo, flight_id)
 
+    async def find_existing(
+        self,
+        *,
+        trip_id: int,
+        flight_number: str,
+        flight_date: datetime,
+    ) -> Optional[FlightInfo]:
+        normalized = flight_number.upper()
+        result = await self._session.execute(
+            select(FlightInfo)
+            .where(
+                FlightInfo.trip_id == trip_id,
+                func.upper(FlightInfo.flight_number) == normalized,
+                func.date(FlightInfo.scheduled_departure_at) == flight_date.date().isoformat(),
+            )
+            .order_by(FlightInfo.id.asc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def refresh_status(self, flight_id: int) -> Optional[FlightInfo]:
         """Pull latest status from provider, with free-tier refresh guards."""
         flight = await self.get(flight_id)
@@ -68,10 +88,15 @@ class FlightService:
         if flight.updated_at and now - flight.updated_at < min_age:
             return flight
 
-        result = await self._provider.lookup(
-            flight_number=flight.flight_number,
-            date=flight.scheduled_departure_at or now,
-        )
+        try:
+            result = await self._provider.lookup(
+                flight_number=flight.flight_number,
+                date=flight.scheduled_departure_at or now,
+            )
+        except ProviderRateLimitError:
+            flight.updated_at = now
+            await self._session.flush()
+            raise
 
         if result:
             flight.status = result.status or flight.status
