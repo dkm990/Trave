@@ -194,6 +194,7 @@ class FlightCreateRequest(BaseModel):
 class FlightOut(ORMModel):
     id: int
     trip_id: int
+    trip_title: str
     flight_number: str
     airline_code: str
     airline_name: Optional[str] = None

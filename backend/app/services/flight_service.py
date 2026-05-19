@@ -7,7 +7,6 @@ from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.models.flight import FlightInfo
 from app.models.trip import Trip, TripMember
@@ -31,16 +30,26 @@ class FlightService:
         )
         return list(result.scalars().all())
 
-    async def list_for_user(self, user_id: int) -> list[FlightInfo]:
-        """Get all flights across all trips the user belongs to."""
+
+    async def list_all(self) -> list[tuple[FlightInfo, str]]:
+        """Get all flights with their trip titles for the public read-only flights page."""
         result = await self._session.execute(
-            select(FlightInfo)
+            select(FlightInfo, Trip.title)
+            .join(Trip, FlightInfo.trip_id == Trip.id)
+            .order_by(FlightInfo.scheduled_departure_at.desc())
+        )
+        return [(flight, title) for flight, title in result.all()]
+
+    async def list_for_user(self, user_id: int) -> list[tuple[FlightInfo, str]]:
+        """Get all flights across all trips the user belongs to, with trip titles."""
+        result = await self._session.execute(
+            select(FlightInfo, Trip.title)
             .join(Trip, FlightInfo.trip_id == Trip.id)
             .join(TripMember, Trip.id == TripMember.trip_id)
             .where(TripMember.user_id == user_id)
             .order_by(FlightInfo.scheduled_departure_at.desc())
         )
-        return list(result.scalars().all())
+        return [(flight, title) for flight, title in result.all()]
 
     async def get(self, flight_id: int) -> Optional[FlightInfo]:
         return await self._session.get(FlightInfo, flight_id)

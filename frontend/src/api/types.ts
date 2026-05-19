@@ -201,3 +201,31 @@ export interface AnalyticsResponse {
   debts: DashboardTransfer[];
   count: number;
 }
+
+
+export interface Flight {
+  id: number;
+  trip_id: number;
+  trip_title: string;
+  flight_number: string;
+  airline_code: string;
+  airline_name: string | null;
+  departure_city: string;
+  arrival_city: string;
+  departure_airport: string;
+  arrival_airport: string;
+  departure_terminal: string | null;
+  arrival_terminal: string | null;
+  scheduled_departure_at: string;
+  actual_departure_at: string | null;
+  estimated_departure_at: string | null;
+  scheduled_arrival_at: string;
+  actual_arrival_at: string | null;
+  estimated_arrival_at: string | null;
+  status: string;
+  check_in_counter: string | null;
+  gate: string | null;
+  baggage_belt: string | null;
+  created_at: string;
+  updated_at: string | null;
+}
