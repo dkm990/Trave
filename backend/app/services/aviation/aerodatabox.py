@@ -114,7 +114,20 @@ class AeroDataBoxProvider(BaseFlightProvider):
             self._cache[cache_key] = (now, None)
             return None
         response.raise_for_status()
-        raw = response.json()
+        try:
+            raw = response.json()
+        except ValueError:
+            logger.warning(
+                "AeroDataBox non-json response flight=%s date=%s endpoint=/flights/number/%s/%s status=%s body=%r",
+                normalized,
+                date_local,
+                normalized,
+                date_local,
+                response.status_code,
+                response.text[:500],
+            )
+            self._cache[cache_key] = (now, None)
+            return None
         logger.info("AeroDataBox raw response flight=%s date=%s raw=%r", normalized, date_local, raw)
         result = self._map_response(normalized, raw)
         self._cache[cache_key] = (now, result)
