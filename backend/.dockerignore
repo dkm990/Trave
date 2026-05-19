@@ -1,0 +1,36 @@
+# Secrets
+.env
+*.env
+!.env.example
+
+# Python venv & caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local data — не пускаем БД в образ
+*.db
+*.sqlite
+*.sqlite3
+yo.backup-*.db
+
+# Tests/dev артефакты
+tests/__pycache__/
+scripts/__pycache__/
+
+# Alembic local cache
+alembic/versions/__pycache__/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db

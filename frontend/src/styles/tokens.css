@@ -1,0 +1,59 @@
+/* ── TravelBot Design Tokens ── */
+/* Telegram Mini App overrides: use TG colors when available, our palette as fallback */
+
+:root {
+  /* Background hierarchy */
+  --bg:               var(--tg-theme-bg-color, #0F1A22);
+  --surface:          var(--tg-theme-secondary-bg-color, #182633);
+  --surface-elevated: #203244;
+
+  /* Brand accents */
+  --accent-blue:      #5DA9FF;
+  --accent-green:     #6EE7A8;
+  --accent-blue-dim:  rgba(93, 169, 255, 0.12);
+  --accent-green-dim: rgba(110, 231, 168, 0.10);
+
+  /* Text */
+  --text-primary:     var(--tg-theme-text-color, #F4F7FA);
+  --text-secondary:   var(--tg-theme-hint-color, #8DA3B8);
+  --text-muted:       rgba(141, 163, 184, 0.55);
+
+  /* Semantic */
+  --danger:           #FF6B6B;
+  --danger-dim:       rgba(255, 107, 107, 0.12);
+  --warning:          #FFD166;
+  --success:          #6EE7A8;
+  --success-dim:      rgba(110, 231, 168, 0.10);
+
+  /* Button / Link (inherit TG when possible) */
+  --button:           var(--tg-theme-button-color, #5DA9FF);
+  --button-text:      var(--tg-theme-button-text-color, #0F1A22);
+  --link:             var(--tg-theme-link-color, #5DA9FF);
+
+  /* Radii */
+  --radius-sm:        10px;
+  --radius-md:        14px;
+  --radius-lg:        18px;
+  --radius-xl:        22px;
+  --radius-full:      999px;
+
+  /* Shadows */
+  --shadow-card:      0 2px 8px rgba(0, 0, 0, 0.20);
+  --shadow-elevated:  0 4px 16px rgba(0, 0, 0, 0.28);
+
+  /* Spacing */
+  --space-xs:         4px;
+  --space-sm:         8px;
+  --space-md:         12px;
+  --space-lg:         16px;
+  --space-xl:         20px;
+  --space-2xl:        24px;
+  --space-3xl:        32px;
+
+  /* Typography */
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  /* Transitions */
+  --ease:             cubic-bezier(0.2, 0, 0, 1);
+  --ease-spring:      cubic-bezier(0.34, 1.56, 0.64, 1);
+}

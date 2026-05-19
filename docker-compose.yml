@@ -1,0 +1,106 @@
+# ============================================================================
+# Yo — production docker-compose для VPS.
+#
+# Сервисы:
+#   api       — FastAPI Mini App backend (uvicorn)
+#   bot       — Telegram bot в long-polling
+#   frontend  — статика Mini App (nginx)
+#   caddy     — reverse proxy + автоматический Let's Encrypt
+#
+# Запуск на VPS:
+#   cp backend/.env.example backend/.env  &&  отредактировать
+#   echo "MINI_APP_DOMAIN=yo.example.com" >> .env
+#   docker compose up -d --build
+#
+# Для локальной разработки compose не нужен — есть uvicorn + npm run dev.
+# ============================================================================
+
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: yo-backend:latest
+    container_name: yo-api
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      # SQLite внутри volume. Можно переопределить через .env (DATABASE_URL).
+      DATABASE_URL: ${DATABASE_URL:-sqlite+aiosqlite:////app/data/yo.db}
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      DEV_ALLOW_INSECURE_AUTH: ${DEV_ALLOW_INSECURE_AUTH:-0}
+    volumes:
+      - yo_data:/app/data
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - yo_net
+
+  bot:
+    image: yo-backend:latest
+    container_name: yo-bot
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-sqlite+aiosqlite:////app/data/yo.db}
+      DEV_ALLOW_INSECURE_AUTH: ${DEV_ALLOW_INSECURE_AUTH:-0}
+    volumes:
+      - yo_data:/app/data
+    command: ["python", "run_bot.py"]
+    networks:
+      - yo_net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Пустая строка = SPA ходит на тот же origin (Caddy проксирует /api).
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+    image: yo-frontend:latest
+    container_name: yo-frontend
+    restart: unless-stopped
+    expose:
+      - "80"
+    networks:
+      - yo_net
+
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: yo-caddy
+    restart: unless-stopped
+    depends_on:
+      - api
+      - frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      MINI_APP_DOMAIN: ${MINI_APP_DOMAIN:-localhost}
+    networks:
+      - yo_net
+
+volumes:
+  yo_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  yo_net:
+    driver: bridge

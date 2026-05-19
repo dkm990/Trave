@@ -1,0 +1,88 @@
+from __future__ import annotations
+
+from aiogram import F, Router
+from aiogram.enums import ChatType
+from aiogram.filters import Command
+from aiogram.types import Message
+
+from app.bot.session import session_scope
+from app.services.balance_service import BalanceService, simplify_debts
+from app.services.formatting import format_money
+from app.services.trip_service import TripService
+from app.services.user_service import UserService
+
+router = Router(name="private_router")
+router.message.filter(F.chat.type == ChatType.PRIVATE)
+
+
+@router.message(Command("newtrip"))
+async def cmd_new_trip_private(message: Message):
+    title = (message.text or "").partition(" ")[2].strip()
+    if not title:
+        await message.answer("Укажи название: <code>/newtrip Грузия 2025</code>")
+        return
+    async with session_scope() as session:
+        user = await UserService(session).get_or_create(
+            telegram_user_id=message.from_user.id,
+            username=message.from_user.username,
+            first_name=message.from_user.first_name,
+            last_name=message.from_user.last_name,
+        )
+        trip = await TripService(session).create_trip(title=title, owner=user)
+    await message.answer(f"Поездка создана: <b>{trip.title}</b> (id={trip.id})")
+
+
+@router.message(Command("trips"))
+async def cmd_trips(message: Message):
+    async with session_scope() as session:
+        user = await UserService(session).get_or_create(
+            telegram_user_id=message.from_user.id,
+            username=message.from_user.username,
+            first_name=message.from_user.first_name,
+            last_name=message.from_user.last_name,
+        )
+        trips = await TripService(session).list_user_trips(user.id)
+    if not trips:
+        await message.answer("Поездок ещё нет. Создать: <code>/newtrip Название</code>")
+        return
+    lines = [f"• <b>{t.title}</b> ({t.default_currency}) — id {t.id}" for t in trips]
+    await message.answer("Твои поездки:\n" + "\n".join(lines))
+
+
+@router.message(Command("balance"))
+async def cmd_balance_private(message: Message):
+    async with session_scope() as session:
+        user = await UserService(session).get_by_telegram_id(message.from_user.id)
+        if not user:
+            await message.answer("Сначала создай поездку: /newtrip")
+            return
+        trips = await TripService(session).list_user_trips(user.id)
+        if not trips:
+            await message.answer("Нет активных поездок.")
+            return
+        trip = trips[0]
+        balances = await BalanceService(session).calculate_balances(trip.id)
+        transfers = simplify_debts(balances)
+        members = await TripService(session).get_members(trip.id)
+
+    name_by_id = {m.user_id: (m.display_name or f"user_{m.user_id}") for m in members}
+    cur = trip.default_currency
+    head = f"<b>{trip.title}</b> · база {cur}\n"
+    if not balances:
+        await message.answer(head + "Расходов нет.")
+        return
+
+    bal_lines = "\n".join(
+        f"• {name_by_id.get(b.user_id, b.user_id)}: оплатил {format_money(b.paid, cur)}, "
+        f"доля {format_money(b.owes, cur)}, баланс {format_money(b.net, cur)}"
+        for b in balances
+    )
+    if transfers:
+        t_lines = "\n".join(
+            f"→ {name_by_id.get(t.from_user_id, t.from_user_id)} должен "
+            f"{name_by_id.get(t.to_user_id, t.to_user_id)} {format_money(t.amount, cur)}"
+            for t in transfers
+        )
+    else:
+        t_lines = "Все рассчитались."
+    await message.answer(f"{head}\n{bal_lines}\n\n{t_lines}")

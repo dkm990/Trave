@@ -1,0 +1,47 @@
+# ============================================================================
+# Yo Mini App — Caddy reverse proxy.
+#
+# Production (Docker compose на VPS):
+#   - {$MINI_APP_DOMAIN} автоматически получает сертификат от Let's Encrypt.
+#   - /api/*  → backend api:8000
+#   - всё остальное → frontend:80 (nginx со статикой Mini App)
+#
+# Локальная разработка (старый сценарий через `caddy run` напрямую):
+#   - travetest.duckdns.org → localhost:5173
+# ============================================================================
+
+{$MINI_APP_DOMAIN:localhost} {
+	encode zstd gzip
+
+	# Backend API
+	@api path /api/* /health /diagnostics
+	handle @api {
+		reverse_proxy api:8000
+	}
+
+	# Telegram webhook (на случай переключения с polling)
+	handle /telegram/webhook* {
+		reverse_proxy api:8000
+	}
+
+	# Mini App SPA (статика)
+	handle {
+		reverse_proxy frontend:80
+	}
+
+	# Базовые security-заголовки. CSP оставлен мягким для Telegram WebApp.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Запрет фрейминга кроме telegram.org.
+		Content-Security-Policy "frame-ancestors 'self' https://web.telegram.org https://telegram.org"
+		-Server
+	}
+}
+
+# Локальный dev-сценарий (caddy запущен на хосте, фронт на 5173).
+# Можно удалить если на VPS не нужно.
+travetest.duckdns.org {
+	reverse_proxy localhost:5173
+}

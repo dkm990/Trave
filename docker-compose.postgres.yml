@@ -1,0 +1,44 @@
+# ============================================================================
+# Override для запуска с Postgres вместо SQLite.
+#
+# Применение:
+#   docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
+#
+# В .env обязательно поставить:
+#   DATABASE_URL=postgresql+asyncpg://yo:<пароль>@postgres:5432/yo
+#   POSTGRES_PASSWORD=<пароль>
+# ============================================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: yo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-yo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-yo}
+    volumes:
+      - yo_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-yo} -d ${POSTGRES_DB:-yo}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - yo_net
+
+  api:
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  bot:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+
+volumes:
+  yo_pg:
