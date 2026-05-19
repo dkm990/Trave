@@ -158,7 +158,7 @@ async def get_flight_status(
     if flight is None:
         raise HTTPException(404, "Flight not found")
     trip = await TripService(session).get_trip(flight.trip_id)
-    return _flight_out(flight, trip.title if trip else f"Поездка #{flight.trip_id}")
+    return _flight_out(flight, trip.title if trip else "Без названия")
 
 
 # ── Global flights (all user's flights across trips) ──

@@ -107,6 +107,12 @@ export function TripDashboardPage() {
         >
           Документы
         </Link>
+        <Link
+          to={`/trips/${trip.id}/flights`}
+          className={`segmented-tab${isActive("/flights") ? " active" : ""}`}
+        >
+          Рейсы
+        </Link>
       </div>
 
       {/* ── Today categories ── */}

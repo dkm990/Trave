@@ -7,6 +7,7 @@ import { BalancesPage } from "./pages/BalancesPage";
 import { DocumentsPage } from "./pages/DocumentsPage";
 import { ConverterPage } from "./pages/ConverterPage";
 import { FlightsPage } from "./pages/FlightsPage";
+import { TripFlightsPage } from "./pages/TripFlightsPage";
 
 export function App() {
   return (
@@ -19,6 +20,7 @@ export function App() {
         <Route path="/trips/:tripId/analytics" element={<AnalyticsPage />} />
         <Route path="/trips/:tripId/balances" element={<BalancesPage />} />
         <Route path="/trips/:tripId/documents" element={<DocumentsPage />} />
+        <Route path="/trips/:tripId/flights" element={<TripFlightsPage />} />
         <Route path="/converter" element={<ConverterPage />} />
         <Route path="/flights" element={<FlightsPage />} />
         <Route path="/trips/:tripId/converter" element={<ConverterPage />} />

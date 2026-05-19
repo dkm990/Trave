@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { Flight, Trip } from "../api/types";
 import { ACTIVE_STATUSES, AddFlightModal, type AddFlightPayload, FlightCard } from "../components/FlightComponents";
@@ -14,33 +15,37 @@ function splitFlights(flights: Flight[]) {
   return { active, history };
 }
 
-export function FlightsPage() {
+export function TripFlightsPage() {
+  const { tripId } = useParams();
+  const numericTripId = Number(tripId);
+  const [trip, setTrip] = useState<Trip | null>(null);
   const [flights, setFlights] = useState<Flight[]>([]);
-  const [trips, setTrips] = useState<Trip[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
 
   async function load() {
+    if (!numericTripId) return;
     setError(null);
-    const [flightRows, tripRows] = await Promise.all([
-      api<Flight[]>("/api/flights"),
-      api<Trip[]>("/api/trips"),
+    const [tripRow, flightRows] = await Promise.all([
+      api<Trip>(`/api/trips/${numericTripId}`),
+      api<Flight[]>(`/api/trips/${numericTripId}/flights`),
     ]);
+    setTrip(tripRow);
     setFlights(flightRows);
-    setTrips(tripRows);
   }
 
   useEffect(() => {
     load()
       .catch((e) => setError((e as Error).message))
       .finally(() => setLoading(false));
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tripId]);
 
   const grouped = useMemo(() => splitFlights(flights), [flights]);
 
   async function addFlight(payload: AddFlightPayload) {
-    await api<Flight>(`/api/trips/${payload.tripId}/flights`, {
+    await api<Flight>(`/api/trips/${numericTripId}/flights`, {
       method: "POST",
       body: JSON.stringify({
         flight_number: payload.flightNumber,
@@ -54,23 +59,25 @@ export function FlightsPage() {
   if (loading) {
     return (
       <div>
-        <div className="skeleton" style={{ width: "45%", height: 24 }} />
-        <div className="skeleton" />
+        <div className="skeleton" style={{ width: "55%", height: 22 }} />
         <div className="skeleton" />
       </div>
     );
   }
 
+  const modalTrips = trip ? [trip] : [];
+
   return (
     <div className="flights-page">
+      <Link to={numericTripId ? `/trips/${numericTripId}` : "/trips"} className="back-link">← К поездке</Link>
       <div className="page-heading-row">
         <div>
           <h1 className="page-title">Рейсы</h1>
-          <div className="page-subtitle">Все перелёты по поездкам</div>
+          <div className="page-subtitle">{trip?.title || "Без названия"}</div>
         </div>
         <div className="flight-header-actions">
           <button type="button" className="icon-btn" aria-label="Обновить рейсы" onClick={() => load().catch((e) => setError((e as Error).message))}>↻</button>
-          <button type="button" className="icon-btn primary" aria-label="Добавить рейс" onClick={() => setModalOpen(true)}>+</button>
+          <button type="button" className="btn-sm primary add-flight-button" onClick={() => setModalOpen(true)}>+ Рейс</button>
         </div>
       </div>
 
@@ -84,7 +91,7 @@ export function FlightsPage() {
         {grouped.active.length === 0 ? (
           <div className="empty">Активных рейсов нет.</div>
         ) : (
-          grouped.active.map((flight) => <FlightCard key={flight.id} flight={flight} variant="list" />)
+          grouped.active.map((flight) => <FlightCard key={flight.id} flight={flight} showTrip={false} />)
         )}
       </section>
 
@@ -96,13 +103,14 @@ export function FlightsPage() {
         {grouped.history.length === 0 ? (
           <div className="empty">История рейсов пока пуста.</div>
         ) : (
-          grouped.history.map((flight) => <FlightCard key={flight.id} flight={flight} variant="list" />)
+          grouped.history.map((flight) => <FlightCard key={flight.id} flight={flight} showTrip={false} />)
         )}
       </section>
 
       {modalOpen ? (
         <AddFlightModal
-          trips={trips}
+          trips={modalTrips}
+          initialTripId={numericTripId}
           onClose={() => setModalOpen(false)}
           onSubmit={addFlight}
         />
