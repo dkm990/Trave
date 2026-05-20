@@ -8,6 +8,7 @@ from typing import Optional, Sequence
 
 import httpx
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -83,6 +84,9 @@ class CurrencyService:
 
         last_error: Optional[Exception] = None
         for provider in self.providers:
+            if provider.name == "frankfurter" and ("RUB" in (base, quote)):
+                logger.info("Skipping frankfurter for %s->%s (RUB not supported)", base, quote)
+                continue
             try:
                 result = await provider.get_rate(base, quote)
             except ProviderUnsupportedPair as exc:
@@ -94,23 +98,21 @@ class CurrencyService:
                 last_error = exc
                 continue
 
-            cache = ExchangeRateCache(
-                base_currency=result.base,
-                quote_currency=result.quote,
-                rate=result.rate,
-                rate_date=result.rate_date,
-                provider=result.provider,
-            )
-            self.session.add(cache)
-            await self.session.flush()
-            return RateInfo(
+            cache, from_cache = await self._upsert_cache_row(
                 base=result.base,
                 quote=result.quote,
                 rate=result.rate,
                 rate_date=result.rate_date,
                 provider=result.provider,
+            )
+            return RateInfo(
+                base=result.base,
+                quote=result.quote,
+                rate=cache.rate,
+                rate_date=cache.rate_date,
+                provider=cache.provider,
                 fetched_at=cache.fetched_at or datetime.now(timezone.utc),
-                from_cache=False,
+                from_cache=from_cache,
             )
 
         stale = await self._get_any_cache(base, quote)
@@ -163,6 +165,66 @@ class CurrencyService:
             .limit(1)
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def _get_cache_by_key(
+        self,
+        *,
+        base: str,
+        quote: str,
+        rate_date: date,
+        provider: str,
+    ) -> ExchangeRateCache | None:
+        stmt = (
+            select(ExchangeRateCache)
+            .where(
+                ExchangeRateCache.base_currency == base,
+                ExchangeRateCache.quote_currency == quote,
+                ExchangeRateCache.rate_date == rate_date,
+                ExchangeRateCache.provider == provider,
+            )
+            .order_by(ExchangeRateCache.fetched_at.desc())
+            .limit(1)
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def _upsert_cache_row(
+        self,
+        *,
+        base: str,
+        quote: str,
+        rate: Decimal,
+        rate_date: date,
+        provider: str,
+    ) -> tuple[ExchangeRateCache, bool]:
+        try:
+            async with self.session.begin_nested():
+                cache = ExchangeRateCache(
+                    base_currency=base,
+                    quote_currency=quote,
+                    rate=rate,
+                    rate_date=rate_date,
+                    provider=provider,
+                )
+                self.session.add(cache)
+                await self.session.flush()
+            return cache, False
+        except IntegrityError:
+            logger.info(
+                "Currency cache conflict for %s->%s %s %s; using existing row",
+                base,
+                quote,
+                rate_date,
+                provider,
+            )
+            existing = await self._get_cache_by_key(
+                base=base,
+                quote=quote,
+                rate_date=rate_date,
+                provider=provider,
+            )
+            if existing is not None:
+                return existing, True
+            raise CurrencyError(f"Currency cache conflict for {base}->{quote}") from None
 
     async def aclose(self) -> None:
         for p in self.providers:

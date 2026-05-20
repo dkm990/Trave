@@ -5,6 +5,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
 
 from app.services.currency_service import CurrencyError, CurrencyService
 from app.services.providers.base import (
@@ -13,6 +14,7 @@ from app.services.providers.base import (
     ProviderUnsupportedPair,
     RateResult,
 )
+from app.models.currency import ExchangeRateCache
 
 
 class FakeProvider(CurrencyProvider):
@@ -173,3 +175,53 @@ async def test_travel_currencies_supported_through_fallback(session, currency):
     await session.commit()
     assert info.provider == "exchangerate_open"
     assert info.quote == currency
+
+
+@pytest.mark.asyncio
+async def test_rub_pair_skips_frankfurter_provider(session):
+    frankfurter = FakeProvider("frankfurter", rates={("RUB", "USD"): "0.013"})
+    fallback = FakeProvider("exchangerate_open", rates={("RUB", "USD"): "0.014"})
+    svc = CurrencyService(session=session, providers=[frankfurter, fallback])
+
+    info = await svc.get_rate("RUB", "USD")
+    await session.commit()
+
+    assert frankfurter.calls == 0
+    assert fallback.calls == 1
+    assert info.provider == "exchangerate_open"
+
+
+@pytest.mark.asyncio
+async def test_unique_cache_conflict_returns_existing_row_without_crash(session):
+    # Existing row already in cache for the same unique key.
+    existing = ExchangeRateCache(
+        base_currency="RUB",
+        quote_currency="USD",
+        rate=Decimal("0.0140"),
+        rate_date=date(2026, 5, 20),
+        provider="exchangerate_open",
+    )
+    session.add(existing)
+    await session.commit()
+
+    provider = FakeProvider("exchangerate_open", rates={("RUB", "USD"): "0.0140"})
+    svc = CurrencyService(session=session, providers=[provider])
+    svc.settings.currency_cache_ttl_hours = -1  # force provider path, skip fresh cache
+
+    info = await svc.get_rate("RUB", "USD")
+    await session.commit()
+
+    rows = (
+        await session.execute(
+            select(ExchangeRateCache).where(
+                ExchangeRateCache.base_currency == "RUB",
+                ExchangeRateCache.quote_currency == "USD",
+                ExchangeRateCache.rate_date == date(2026, 5, 20),
+                ExchangeRateCache.provider == "exchangerate_open",
+            )
+        )
+    ).scalars().all()
+
+    assert len(rows) == 1
+    assert info.rate == Decimal("0.0140")
+    assert info.provider == "exchangerate_open"
