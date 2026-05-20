@@ -268,6 +268,7 @@ class RuleBasedProvider(AIProvider):
         # show_today_spending
         if re.search(
             r"(сколько\s+(мы\s+)?потратил\w*\s*(за\s+)?сегодн)|"
+            r"((?:\u0442\u0440\u0430\u0442\u044b|\u0440\u0430\u0441\u0445\u043e\u0434\u044b)\s*(?:\u0437\u0430\s+)?\u0441\u0435\u0433\u043e\u0434\u043d\u044f)|"
             r"(today\s+spending)|(today\s+expenses)",
             t,
         ):

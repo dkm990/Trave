@@ -317,9 +317,11 @@ async def propose_expense_from_intent(
         problem_desc = (
             "Нашёл несколько вариантов" if ambiguous else "Не смог сопоставить"
         )
+        resolved_participants = ", ".join(name_by_id.get(uid, str(uid)) for uid in participants)
         await send(
             f"<b>{amount_str}</b>, {title}, оплатил {user.display_name}.\n\n"
             f"{problem_desc}: {', '.join(problem_names)}.\n"
+            f"Сейчас в расходе: {resolved_participants}.\n"
             f"Выбери участников вручную:",
             reply_markup=build_picker_kb(_PENDING[pid], pid),
         )
@@ -347,10 +349,14 @@ async def propose_expense_from_intent(
     else:
         participants_str = ", ".join(name_by_id.get(uid, str(uid)) for uid in participants)
     amount_str = format_money(amount, currency)
+    per_person_raw = _per_person_share(amount, len(participants))
+    per_person_line = ""
+    if per_person_raw:
+        per_person_line = f"\nPer person: {format_money(per_person_raw, currency)}"
     await send(
         f"Понял: <b>{amount_str}</b>, "
         f"{title}, оплатил {user.display_name}, "
-        f"делим на: {participants_str}. Добавить?",
+        f"делим на: {participants_str}.{per_person_line} Добавить?",
         reply_markup=build_confirm_kb(pid),
     )
 
@@ -430,6 +436,16 @@ def _participants_str(pending: PendingExpense) -> str:
         only = names.get(payer, f"user_{payer}")
         return f"{only} (только тебя)"
     return ", ".join(names.get(uid, str(uid)) for uid in pending.participants)
+
+
+def _per_person_share(amount: str, participants_count: int) -> str | None:
+    if participants_count <= 0:
+        return None
+    try:
+        total = Decimal(amount)
+    except (InvalidOperation, TypeError):
+        return None
+    return str((total / Decimal(participants_count)).quantize(Decimal("0.01")))
 
 
 def _open_picker_view(pending: PendingExpense, pid: str) -> tuple[str, InlineKeyboardMarkup]:
@@ -512,9 +528,15 @@ async def on_callback(query: CallbackQuery):
         names = _names_for(pending)
         payer = names.get(pending.payer_user_id, str(pending.payer_user_id))
         amount_str = format_money(pending.amount, pending.currency)
+        per_person_raw = _per_person_share(pending.amount, len(pending.participants))
+        per_person_line = ""
+        if per_person_raw:
+            per_person_line = (
+                f"\nPer person: {format_money(per_person_raw, pending.currency)}"
+            )
         await query.message.edit_text(
             f"Понял: <b>{amount_str}</b>, {pending.title}, оплатил {payer}, "
-            f"делим на: {_participants_str(pending)}. Добавить?",
+            f"делим на: {_participants_str(pending)}.{per_person_line} Добавить?",
             reply_markup=build_confirm_kb(pid),
         )
         await query.answer()
