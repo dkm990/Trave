@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import current_user, db_session
 from app.models.flight import FlightInfo
@@ -172,7 +173,17 @@ async def add_flight(
         updated_at=datetime.utcnow(),
     )
     session.add(flight)
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "FLIGHT_ALREADY_EXISTS",
+                "message": "Этот рейс уже добавлен",
+            },
+        ) from exc
 
     return _flight_out(flight, trip.title)
 

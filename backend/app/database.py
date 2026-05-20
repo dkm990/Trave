@@ -75,3 +75,15 @@ async def init_db() -> None:
                 await conn.execute(text(ddl))
             except Exception:
                 pass
+
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS "
+                "uq_flights_trip_normalized_number_date "
+                "ON flights ("
+                "trip_id, "
+                "upper(replace(replace(flight_number, ' ', ''), '-', '')), "
+                "date(scheduled_departure_at)"
+                ")"
+            )
+        )
