@@ -37,6 +37,7 @@ class PendingExpense:
     chat_id: int
     from_user_id: int
     trip_id: int
+    trip_title: str
     payer_user_id: int
     title: str
     amount: str
@@ -56,6 +57,7 @@ def _new_pending(
     chat_id: int,
     from_user_id: int,
     trip_id: int,
+    trip_title: str,
     payer_user_id: int,
     title: str,
     amount: str,
@@ -72,6 +74,7 @@ def _new_pending(
         chat_id=chat_id,
         from_user_id=from_user_id,
         trip_id=trip_id,
+        trip_title=trip_title,
         payer_user_id=payer_user_id,
         title=title,
         amount=str(amount),
@@ -90,6 +93,7 @@ def store_pending(
     chat_id: int,
     from_user_id: int,
     trip_id: int,
+    trip_title: str,
     payer_user_id: int,
     title: str,
     amount: str,
@@ -102,6 +106,7 @@ def store_pending(
         chat_id=chat_id,
         from_user_id=from_user_id,
         trip_id=trip_id,
+        trip_title=trip_title,
         payer_user_id=payer_user_id,
         title=title,
         amount=amount,
@@ -270,6 +275,7 @@ async def propose_expense_from_intent(
             chat_id=message.chat.id,
             from_user_id=message.from_user.id,
             trip_id=trip.id,
+            trip_title=trip.title,
             payer_user_id=user.id,
             title=title,
             amount=amount,
@@ -303,6 +309,7 @@ async def propose_expense_from_intent(
             chat_id=message.chat.id,
             from_user_id=message.from_user.id,
             trip_id=trip.id,
+            trip_title=trip.title,
             payer_user_id=user.id,
             title=title,
             amount=amount,
@@ -334,6 +341,7 @@ async def propose_expense_from_intent(
         chat_id=message.chat.id,
         from_user_id=message.from_user.id,
         trip_id=trip.id,
+        trip_title=trip.title,
         payer_user_id=user.id,
         title=title,
         amount=amount,
@@ -354,6 +362,7 @@ async def propose_expense_from_intent(
     if per_person_raw:
         per_person_line = f"\nPer person: {format_money(per_person_raw, currency)}"
     await send(
+        _trip_label_line(trip.title) +
         f"Понял: <b>{amount_str}</b>, "
         f"{title}, оплатил {user.display_name}, "
         f"делим на: {participants_str}.{per_person_line} Добавить?",
@@ -448,6 +457,27 @@ def _per_person_share(amount: str, participants_count: int) -> str | None:
     return str((total / Decimal(participants_count)).quantize(Decimal("0.01")))
 
 
+def _trip_label_line(trip_title: str) -> str:
+    return f"Поездка: <b>{trip_title}</b>\n"
+
+
+def _build_confirm_text(
+    *,
+    trip_title: str,
+    amount_str: str,
+    title: str,
+    payer_name: str,
+    participants_str: str,
+    per_person_line: str,
+) -> str:
+    return (
+        _trip_label_line(trip_title)
+        + f"Понял: <b>{amount_str}</b>, "
+        + f"{title}, оплатил {payer_name}, "
+        + f"делим на: {participants_str}.{per_person_line} Добавить?"
+    )
+
+
 def _open_picker_view(pending: PendingExpense, pid: str) -> tuple[str, InlineKeyboardMarkup]:
     names = _names_for(pending)
     payer = names.get(pending.payer_user_id, str(pending.payer_user_id))
@@ -535,6 +565,7 @@ async def on_callback(query: CallbackQuery):
                 f"\nPer person: {format_money(per_person_raw, pending.currency)}"
             )
         await query.message.edit_text(
+            _trip_label_line(pending.trip_title) +
             f"Понял: <b>{amount_str}</b>, {pending.title}, оплатил {payer}, "
             f"делим на: {_participants_str(pending)}.{per_person_line} Добавить?",
             reply_markup=build_confirm_kb(pid),

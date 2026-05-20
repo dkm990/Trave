@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -64,6 +64,15 @@ class TripService:
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
+    async def list_trips_for_chat(self, chat_id: int) -> list[Trip]:
+        stmt = (
+            select(Trip)
+            .where(Trip.telegram_chat_id == chat_id, Trip.archived_at.is_(None))
+            .order_by(Trip.created_at.desc())
+            .options(selectinload(Trip.members))
+        )
+        return list((await self.session.execute(stmt)).scalars().unique())
+
     async def add_member(self, trip: Trip, user: User) -> TripMember:
         existing = (
             await self.session.execute(
@@ -89,6 +98,12 @@ class TripService:
         return member
 
     async def bind_to_chat(self, trip: Trip, chat_id: int) -> Trip:
+        # One active trip per chat: detach other trips first.
+        await self.session.execute(
+            update(Trip)
+            .where(Trip.telegram_chat_id == chat_id, Trip.id != trip.id)
+            .values(telegram_chat_id=None)
+        )
         trip.telegram_chat_id = chat_id
         await self.session.flush()
         return trip

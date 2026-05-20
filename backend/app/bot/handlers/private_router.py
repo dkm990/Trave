@@ -15,6 +15,15 @@ router = Router(name="private_router")
 router.message.filter(F.chat.type == ChatType.PRIVATE)
 
 
+def _format_my_trips_message(trips: list) -> str:
+    if not trips:
+        return "Поездок ещё нет. Создать: <code>/newtrip Название</code>"
+    lines = [f"• <b>{t.title}</b> ({t.default_currency}) — id {t.id}" for t in trips]
+    lines.append("")
+    lines.append("Для группы: /bindtrip TRIP_ID")
+    return "Твои поездки:\n" + "\n".join(lines)
+
+
 @router.message(Command("newtrip"))
 async def cmd_new_trip_private(message: Message):
     title = (message.text or "").partition(" ")[2].strip()
@@ -34,6 +43,15 @@ async def cmd_new_trip_private(message: Message):
 
 @router.message(Command("trips"))
 async def cmd_trips(message: Message):
+    await _send_user_trips(message)
+
+
+@router.message(Command("mytrips"))
+async def cmd_my_trips(message: Message):
+    await _send_user_trips(message)
+
+
+async def _send_user_trips(message: Message):
     async with session_scope() as session:
         user = await UserService(session).get_or_create(
             telegram_user_id=message.from_user.id,
@@ -42,11 +60,7 @@ async def cmd_trips(message: Message):
             last_name=message.from_user.last_name,
         )
         trips = await TripService(session).list_user_trips(user.id)
-    if not trips:
-        await message.answer("Поездок ещё нет. Создать: <code>/newtrip Название</code>")
-        return
-    lines = [f"• <b>{t.title}</b> ({t.default_currency}) — id {t.id}" for t in trips]
-    await message.answer("Твои поездки:\n" + "\n".join(lines))
+    await message.answer(_format_my_trips_message(trips))
 
 
 @router.message(Command("balance"))
