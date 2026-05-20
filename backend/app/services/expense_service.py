@@ -366,7 +366,7 @@ class ExpenseService:
             select(Expense)
             .where(
                 Expense.trip_id == trip_id,
-                Expense.status != "canceled",
+                Expense.status == "confirmed",
                 func.date(Expense.created_at) == today_str,
             )
             .options(selectinload(Expense.shares))
@@ -464,7 +464,12 @@ class ExpenseService:
             total=_q2(total),
             base_currency=base_cur,
             by_original_currency=by_orig,
-            by_category=by_cat,
+            by_category=dict(
+                sorted(
+                    by_cat.items(),
+                    key=lambda item: (-item[1], item[0]),
+                )
+            ),
             by_category_original=by_cat_orig,
             count=len(expenses),
         )
