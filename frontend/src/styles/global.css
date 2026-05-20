@@ -895,6 +895,11 @@ a, a:visited { color: var(--link); text-decoration: none; }
   gap: 14px;
   margin-bottom: 18px;
 }
+.flight-title-with-mascot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
 .page-title {
   margin: 0;
   color: var(--text-primary);

@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { Flight, Trip } from "../api/types";
 import { ACTIVE_STATUSES, AddFlightModal, type AddFlightPayload, FlightCard } from "../components/FlightComponents";
+import { FrogHero } from "../components/FrogHero";
 
 function splitFlights(flights: Flight[]) {
   const now = Date.now();
@@ -69,15 +70,29 @@ export function TripFlightsPage() {
 
   return (
     <div className="flights-page">
-      <Link to={numericTripId ? `/trips/${numericTripId}` : "/trips"} className="back-link">← К поездке</Link>
+      <Link to={numericTripId ? `/trips/${numericTripId}` : "/trips"} className="back-link">
+        ← К поездке
+      </Link>
       <div className="page-heading-row">
-        <div>
-          <h1 className="page-title">Рейсы</h1>
-          <div className="page-subtitle">{trip?.title || "Без названия"}</div>
+        <div className="flight-title-with-mascot">
+          <FrogHero variant="pilot" size={36} />
+          <div>
+            <h1 className="page-title">Рейсы</h1>
+            <div className="page-subtitle">{trip?.title || "Без названия"}</div>
+          </div>
         </div>
         <div className="flight-header-actions">
-          <button type="button" className="icon-btn" aria-label="Обновить рейсы" onClick={() => load().catch((e) => setError((e as Error).message))}>↻</button>
-          <button type="button" className="btn-sm primary add-flight-button" onClick={() => setModalOpen(true)}>+ Рейс</button>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Обновить рейсы"
+            onClick={() => load().catch((e) => setError((e as Error).message))}
+          >
+            ↻
+          </button>
+          <button type="button" className="btn-sm primary add-flight-button" onClick={() => setModalOpen(true)}>
+            + Рейс
+          </button>
         </div>
       </div>
 

@@ -1,6 +1,6 @@
 import React from "react";
 
-type MascotVariant = "backpack" | "accountant" | "cashier" | "passport";
+type MascotVariant = "backpack" | "accountant" | "cashier" | "passport" | "pilot";
 
 type Props = {
   variant: MascotVariant;
@@ -13,6 +13,7 @@ const mascotImages: Record<MascotVariant, string> = {
   accountant: "/assets/mascots/accountant.png",
   cashier: "/assets/mascots/cashier.png",
   passport: "/assets/mascots/passport.png",
+  pilot: "/assets/mascots/pilot.png",
 };
 
 export function TravelFrogMascot({

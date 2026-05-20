@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import type { Flight, Trip } from "../api/types";
 import { ACTIVE_STATUSES, AddFlightModal, type AddFlightPayload, FlightCard } from "../components/FlightComponents";
+import { FrogHero } from "../components/FrogHero";
 
 function splitFlights(flights: Flight[]) {
   const now = Date.now();
@@ -64,13 +65,30 @@ export function FlightsPage() {
   return (
     <div className="flights-page">
       <div className="page-heading-row">
-        <div>
-          <h1 className="page-title">Рейсы</h1>
-          <div className="page-subtitle">Все перелёты по поездкам</div>
+        <div className="flight-title-with-mascot">
+          <FrogHero variant="pilot" size={36} />
+          <div>
+            <h1 className="page-title">Рейсы</h1>
+            <div className="page-subtitle">Все перелеты по поездкам</div>
+          </div>
         </div>
         <div className="flight-header-actions">
-          <button type="button" className="icon-btn" aria-label="Обновить рейсы" onClick={() => load().catch((e) => setError((e as Error).message))}>↻</button>
-          <button type="button" className="icon-btn primary" aria-label="Добавить рейс" onClick={() => setModalOpen(true)}>+</button>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Обновить рейсы"
+            onClick={() => load().catch((e) => setError((e as Error).message))}
+          >
+            ↻
+          </button>
+          <button
+            type="button"
+            className="icon-btn primary"
+            aria-label="Добавить рейс"
+            onClick={() => setModalOpen(true)}
+          >
+            +
+          </button>
         </div>
       </div>
 
