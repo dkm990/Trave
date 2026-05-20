@@ -164,6 +164,38 @@ def _detect_participants(original: str) -> list[str]:
     return names
 
 
+def _detect_participants(original: str) -> list[str]:
+    """Extract mentioned participants from patterns like 'с Зоей', 'with Zoe'."""
+    names: list[str] = []
+    for m in re.finditer(
+        r"\b(?:с|with)\s+([A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё-]*(?:\s*(?:и|and|,)\s*[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё-]*)*)",
+        original,
+        re.IGNORECASE,
+    ):
+        chunk = m.group(1)
+        for raw in re.split(r"\s*(?:и|and|,)\s*", chunk, flags=re.IGNORECASE):
+            candidate = raw.strip()
+            if candidate and candidate not in names:
+                names.append(candidate)
+    return names
+
+
+def _detect_participants(original: str) -> list[str]:
+    """Final participant parser used by expense intent extraction."""
+    names: list[str] = []
+    for m in re.finditer(
+        r"\b(?:с|with)\s+([A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё-]*(?:(?:\s+и\s+|\s+and\s+|\s*,\s*)[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё-]*)*)",
+        original,
+        re.IGNORECASE,
+    ):
+        chunk = m.group(1)
+        for raw in re.split(r"(?:\s+и\s+|\s+and\s+|\s*,\s*)", chunk, flags=re.IGNORECASE):
+            candidate = raw.strip()
+            if candidate and candidate not in names:
+                names.append(candidate)
+    return names
+
+
 def _detect_uneven_split(text: str) -> tuple[str, list[dict] | None]:
     name_amount_pairs = re.findall(
         r"(?:(\d+(?:[.,]\d+)?)\s*(?:с\s+)?(я|меня|мне|[A-ZА-ЯЁ][a-zа-яё]+)|"
@@ -466,7 +498,8 @@ class RuleBasedProvider(AIProvider):
 
 def _extract_title(normalized: str, money_match: re.Match[str]) -> str:
     """Extract the title of an expense by stripping the matched amount/currency."""
-    title = normalized.replace(money_match.group(0), "").strip()
+    start, end = money_match.span()
+    title = (normalized[:start] + normalized[end:]).strip()
     # Remove leading delimiters and known structural words
     title = re.sub(
         r"^[,.\-:;!?\s]+|[,.\-:;!?\s]+$", "", title
