@@ -16,11 +16,16 @@ env/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
 
 # Databases
 *.db
 *.sqlite
 *.sqlite3
+*.db-*
+*.sqlite-*
 
 # Node
 node_modules/
@@ -28,6 +33,10 @@ dist/
 build/
 .vite/
 *.local
+coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # IDE
 .idea/
@@ -55,3 +64,10 @@ frontend/.env.*
 !frontend/.env.example
 frontend/dist/
 *.tsbuildinfo
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.dump
+*.backup
