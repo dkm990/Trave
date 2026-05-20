@@ -335,6 +335,56 @@ async def test_parse_50k_thb():
     assert intent.payload["category"] == "hotel"
 
 
+@pytest.mark.asyncio
+async def test_parse_spending_today_phrase():
+    p = RuleBasedProvider()
+    intent = await p.parse_intent("траты сегодня")
+    assert intent.action == "show_today_spending"
+
+
+@pytest.mark.asyncio
+async def test_parse_spending_for_today_phrase():
+    p = RuleBasedProvider()
+    intent = await p.parse_intent("траты за сегодня")
+    assert intent.action == "show_today_spending"
+
+
+@pytest.mark.asyncio
+async def test_parse_expenses_today_phrase():
+    p = RuleBasedProvider()
+    intent = await p.parse_intent("расходы сегодня")
+    assert intent.action == "show_today_spending"
+
+
+@pytest.mark.asyncio
+async def test_parse_expenses_for_today_phrase():
+    p = RuleBasedProvider()
+    intent = await p.parse_intent("расходы за сегодня")
+    assert intent.action == "show_today_spending"
+
+
+@pytest.mark.asyncio
+async def test_parse_taxi_with_ahmed_still_add_expense():
+    p = RuleBasedProvider()
+    intent = await p.parse_intent("1000 RUB такси с Ахмедом")
+    assert intent.action == "add_expense"
+    assert intent.payload["amount"] == "1000"
+
+
+@pytest.mark.asyncio
+async def test_parse_trigger_spending_today_phrase():
+    p = RuleBasedProvider()
+    intent = await p.parse_intent("Трейв, траты сегодня")
+    assert intent.action == "show_today_spending"
+
+
+@pytest.mark.asyncio
+async def test_parse_trigger_spending_for_today_phrase():
+    p = RuleBasedProvider()
+    intent = await p.parse_intent("Трейв, траты за сегодня")
+    assert intent.action == "show_today_spending"
+
+
 # --- TRY / Turkish lira tests ---
 
 
