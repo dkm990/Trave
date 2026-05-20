@@ -7,7 +7,7 @@ from aiogram.enums import ChatType
 from aiogram.filters import Command
 from aiogram.types import Message, TelegramObject
 
-from app.bot.filters import GroupAddressedFilter, starts_with_trigger, strip_mention, strip_trigger
+from app.bot.filters import GroupAddressedFilter, strip_mention, strip_trigger
 from app.bot.session import session_scope
 from app.services.balance_service import BalanceService, simplify_debts
 from app.services.formatting import format_money
@@ -21,16 +21,31 @@ router = Router(name="group_router")
 router.message.filter(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}))
 
 
-# ═══════════════════════════════════════════════════════════
-# Middleware: сохраняем ВСЕ сообщения и делаем авто-саммари
-# ═══════════════════════════════════════════════════════════
+def _format_group_trips_message(active_trip, chat_trips: list) -> str:
+    lines: list[str] = []
+    if active_trip:
+        lines.append(
+            f"Активная поездка: <b>{active_trip.title}</b> ({active_trip.default_currency}) — id {active_trip.id}"
+        )
+    else:
+        lines.append("Активная поездка: не выбрана")
+
+    lines.append("")
+    lines.append("Поездки, привязанные к этому чату:")
+    if not chat_trips:
+        lines.append("• (пусто)")
+    else:
+        for t in chat_trips:
+            marker = "✅" if active_trip and t.id == active_trip.id else "•"
+            lines.append(f"{marker} <b>{t.title}</b> ({t.default_currency}) — id {t.id}")
+
+    lines.append("")
+    lines.append("Если знаете ID поездки, используйте /bindtrip TRIP_ID.")
+    lines.append("Я могу показать ваши доступные поездки в личном чате: /mytrips.")
+    return "\n".join(lines)
+
 
 class GroupMessageSaver(BaseMiddleware):
-    """Сохраняет каждое сообщение группы в буфер.
-    Не влияет на обработку сообщения — оно проходит дальше
-    к обычным хендлерам.
-    """
-
     async def __call__(self, handler, event: TelegramObject, data: dict):
         if isinstance(event, Message):
             text = (event.text or event.caption or "")
@@ -46,11 +61,7 @@ async def _save_and_maybe_summarize(message: Message) -> None:
         await svc.save_message(
             chat_id=message.chat.id,
             user_id=message.from_user.id if message.from_user else None,
-            user_name=(
-                message.from_user.full_name
-                if message.from_user
-                else None
-            ),
+            user_name=(message.from_user.full_name if message.from_user else None),
             text=text,
         )
         await session.commit()
@@ -76,7 +87,7 @@ async def _do_summarize(chat_id: int, bot, svc: GroupMemoryService, session) -> 
 
     try:
         summary = await ai.summarize_conversation(formatted)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.warning("Summarize failed for chat=%s: %s", chat_id, exc)
         return
 
@@ -100,17 +111,12 @@ async def _do_summarize(chat_id: int, bot, svc: GroupMemoryService, session) -> 
             chat_id=chat_id,
             text=f"📝 <b>Саммари беседы</b> (последние {len(messages)} сообщений):\n\n{summary}",
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to notify group: %s", exc)
 
 
-# Регистрируем middleware для ВСЕХ сообщений группы
 router.message.middleware(GroupMessageSaver())
 
-
-# ═══════════════════════════════════════════════════════════
-# Команды
-# ═══════════════════════════════════════════════════════════
 
 @router.message(Command("newtrip"))
 async def group_new_trip(message: Message):
@@ -128,22 +134,20 @@ async def group_new_trip(message: Message):
         trip = await TripService(session).create_trip(
             title=title, owner=user, telegram_chat_id=message.chat.id
         )
-    me = await message.bot.me()
-    bot_username = me.username or "bot"
     await message.answer(
-        f"✅ Поездка <b>{trip.title}</b> создана и привязана к этой группе.\n\n"
-        f"ℹ️ Бот не видит список участников группы — каждый должен написать /join сам.\n\n"
-        f"<b>Что дальше</b>\n"
-        f"1. Каждый участник пишет /join, чтобы добавиться в поездку.\n"
-        f"2. Расходы добавляйте любым из способов:\n"
-        f"   <code>/add 1200 RUB ужин за всех</code>\n"
-        f"   <code>/ai я оплатил такси 300000 VND за всех</code>\n"
-        f"   <code>/expense 100 THB Coffee</code>\n"
-        f"3. /balance — кто кому должен.\n"
-        f"4. /app — открыть Mini App с балансами и историей.\n\n"
-        f"ℹ️ Просто напишите <code>Трейв, 1000 лир ресторан за всех</code> "
-        f"— бот поймёт и добавит расход."
+        f"✅ Поездка <b>{trip.title}</b> создана и стала активной для этого чата.\n"
+        "Через /trips можно увидеть активную поездку чата.\n"
+        "Переключить активную можно через /bindtrip TRIP_ID."
     )
+
+
+@router.message(Command("trips"))
+async def group_trips(message: Message):
+    async with session_scope() as session:
+        trip_svc = TripService(session)
+        active = await trip_svc.get_trip_for_chat(message.chat.id)
+        chat_trips = await trip_svc.list_trips_for_chat(message.chat.id)
+    await message.answer(_format_group_trips_message(active, chat_trips))
 
 
 @router.message(Command("bindtrip"))
@@ -159,7 +163,7 @@ async def group_bind_trip(message: Message):
             await message.answer("Поездка не найдена.")
             return
         await trip_svc.bind_to_chat(trip, message.chat.id)
-    await message.answer(f"Поездка <b>{trip.title}</b> привязана к этой группе.")
+    await message.answer(f"Поездка <b>{trip.title}</b> стала активной для этой группы.")
 
 
 @router.message(Command("join"))
@@ -210,17 +214,11 @@ async def group_balance(message: Message):
     await message.answer(f"<b>{trip.title}</b> · база {cur}\n\n{bal_lines}\n\n{t_lines}")
 
 
-# ═══════════════════════════════════════════════════════════
-# Обращение к боту: intent → действие OR chat → ответ
-# ═══════════════════════════════════════════════════════════
-
 @router.message(GroupAddressedFilter(), F.text)
 async def group_natural_text(message: Message):
     from app.bot.intent_router import handle_intent_text
 
-    raw_text = message.text or ""
-    raw_text = raw_text.strip()
-    # Пропускаем команды (они обрабатываются отдельно)
+    raw_text = (message.text or "").strip()
     if raw_text.startswith("/"):
         return
 
