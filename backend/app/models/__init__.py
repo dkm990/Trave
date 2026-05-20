@@ -4,6 +4,7 @@ from app.models.expense import Expense, ExpenseShare, Settlement
 from app.models.document import TravelDocument
 from app.models.currency import ExchangeRateCache
 from app.models.group_memory import GroupMessage, GroupMemory
+from app.models.flight import FlightInfo
 
 # Объединённый импорт, чтобы Alembic / create_all видели все модели
 all_models = (
@@ -17,6 +18,7 @@ all_models = (
     ExchangeRateCache,
     GroupMessage,
     GroupMemory,
+    FlightInfo,
 )
 
 __all__ = [
@@ -30,5 +32,6 @@ __all__ = [
     "ExchangeRateCache",
     "GroupMessage",
     "GroupMemory",
+    "FlightInfo",
     "all_models",
 ]
