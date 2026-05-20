@@ -140,6 +140,11 @@ def compute_shares(
     return shares
 
 
+def split_equally(total: Decimal, participant_user_ids: list[int]) -> dict[int, Decimal]:
+    """Backward-compatible wrapper for legacy imports/tests."""
+    return compute_shares(total, participant_user_ids, mode="equal")
+
+
 class ExpenseService:
     def __init__(self, session: AsyncSession, currency_service: CurrencyService) -> None:
         self.session = session
