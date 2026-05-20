@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -10,6 +11,7 @@ from app.schemas.common import CurrencyConvertOut, CurrencyRateOut
 from app.services.currency_service import CurrencyError, CurrencyService
 
 router = APIRouter(prefix="/api/currency", tags=["currency"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/rate", response_model=CurrencyRateOut)
@@ -23,6 +25,9 @@ async def get_rate(
         info = await svc.get_rate(base, quote)
     except CurrencyError as exc:
         raise HTTPException(503, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Unexpected currency /rate failure for %s->%s: %s", base, quote, exc)
+        raise HTTPException(503, "Currency service temporarily unavailable") from exc
     return CurrencyRateOut(
         base=info.base,
         quote=info.quote,
@@ -46,6 +51,9 @@ async def convert(
         converted, info = await svc.convert(amount, base, quote)
     except CurrencyError as exc:
         raise HTTPException(503, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Unexpected currency /convert failure for %s->%s: %s", base, quote, exc)
+        raise HTTPException(503, "Currency service temporarily unavailable") from exc
     return CurrencyConvertOut(
         amount=amount,
         base=info.base,
