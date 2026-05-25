@@ -15,6 +15,7 @@ from app.services.formatting import format_money
 from app.services.user_service import UserService
 
 router = Router(name="basic")
+GROUP_APP_DEEP_LINK = "https://t.me/TrayeOBot?start=app"
 
 
 def _miniapp_kb() -> InlineKeyboardMarkup:
@@ -27,6 +28,14 @@ def _miniapp_kb() -> InlineKeyboardMarkup:
                     web_app=WebAppInfo(url=settings.mini_app_url),
                 )
             ]
+        ]
+    )
+
+
+def _group_app_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Открыть в личке", url=GROUP_APP_DEEP_LINK)]
         ]
     )
 
@@ -131,9 +140,16 @@ async def cmd_help(message: Message):
 
 @router.message(Command("app"))
 async def cmd_app(message: Message):
+    if _is_group_chat(message):
+        await message.answer(
+            "Mini App открывается в личке с ботом.\n\n"
+            "Нажми кнопку ниже, потом открой приложение.",
+            reply_markup=_group_app_kb(),
+        )
+        return
     await message.answer(
         "Mini App: история расходов, баланс, аналитика, фильтры и редактирование.",
-        reply_markup=_command_kb(message),
+        reply_markup=_miniapp_kb(),
     )
 
 

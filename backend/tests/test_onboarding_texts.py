@@ -4,6 +4,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
+from aiogram.types import InlineKeyboardMarkup
 
 
 class _DummyScope:
@@ -90,6 +91,39 @@ async def test_help_private_returns_private_text_with_webapp(monkeypatch):
     await basic.cmd_help(msg)
 
     assert msg.answers == [(basic.PRIVATE_HELP_TEXT, "KB")]
+
+
+@pytest.mark.asyncio
+async def test_app_private_returns_webapp_markup(monkeypatch):
+    from app.bot.handlers import basic
+
+    monkeypatch.setattr(basic, "_miniapp_kb", lambda: "KB")
+    msg = _DummyMessage("private")
+
+    await basic.cmd_app(msg)
+
+    assert msg.answers == [
+        ("Mini App: история расходов, баланс, аналитика, фильтры и редактирование.", "KB")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_app_group_returns_url_button_without_webapp():
+    from app.bot.handlers import basic
+
+    msg = _DummyMessage("group")
+    await basic.cmd_app(msg)
+
+    assert len(msg.answers) == 1
+    text, markup = msg.answers[0]
+    assert text == (
+        "Mini App открывается в личке с ботом.\n\n"
+        "Нажми кнопку ниже, потом открой приложение."
+    )
+    assert isinstance(markup, InlineKeyboardMarkup)
+    assert markup.inline_keyboard[0][0].text == "Открыть в личке"
+    assert markup.inline_keyboard[0][0].url == "https://t.me/TrayeOBot?start=app"
+    assert markup.inline_keyboard[0][0].web_app is None
 
 
 def test_group_help_is_short_and_actionable():
