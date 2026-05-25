@@ -53,6 +53,22 @@ class PendingExpense:
 _PENDING: dict[str, PendingExpense] = {}
 
 
+CATEGORY_LABELS = {
+    "food": "еда",
+    "taxi": "такси",
+    "hotel": "отель",
+    "tickets": "билеты",
+    "shopping": "покупки",
+    "other": "другое",
+}
+
+
+def _category_label(category: str | None, title: str) -> str:
+    if category and category != "unknown":
+        return CATEGORY_LABELS.get(category, category)
+    return title
+
+
 def _new_pending(
     chat_id: int,
     from_user_id: int,
@@ -154,9 +170,10 @@ def build_picker_kb(pending: PendingExpense, pending_id: str) -> InlineKeyboardM
 
 USAGE_HINT = (
     "Примеры:\n"
-    "<code>/add 1200 RUB ужин за всех</code>\n"
-    "<code>/ai я оплатил такси 300000 VND за всех</code>\n"
-    "<code>/expense 100 THB Coffee</code>"
+    "<code>Трейв, 500 рублей такси</code>\n"
+    "<code>Трейв, 1200 TRY ужин на всех</code>\n"
+    "<code>Трейв, 30 евро музей с Антоном и Машей</code>\n"
+    "<code>Трейв, я оплатил 3000 рублей за отель</code>"
 )
 
 
@@ -207,14 +224,21 @@ async def propose_expense_from_intent(
     send = message.reply if use_reply else message.answer
 
     if not payload.get("amount") or not payload.get("currency"):
-        await send("Не понял сумму или валюту.\n\n" + USAGE_HINT)
+        await send(
+            "Не понял расход.\n\n"
+            "Попробуйте так:\n"
+            + USAGE_HINT
+        )
         return
 
     async with session_scope() as session:
         trip = await _resolve_trip(session, message)
         if not trip:
             await send(
-                "Сначала создай поездку: /newtrip Название (в группе) или /newtrip в личке."
+                "В этом чате пока нет поездки.\n\n"
+                "Создайте её командой:\n"
+                "<code>/newtrip</code>\n\n"
+                "После этого участники смогут нажать /join."
             )
             return
         user = await UserService(session).get_or_create(
@@ -228,7 +252,7 @@ async def propose_expense_from_intent(
 
     members_views = [member_view_from_db(m, u) for m, u in rows]
     name_by_id = {
-        v.user_id: (v.display_name or v.first_name or v.username or f"user_{v.user_id}")
+        v.user_id: (v.display_name or v.first_name or v.username or f"участник {v.user_id}")
         for v in members_views
     }
     name_by_id.setdefault(user.id, user.display_name)
@@ -292,7 +316,7 @@ async def propose_expense_from_intent(
         shares_lines = []
         for uid in participant_ids:
             share_val = custom_shares.get(uid, "?")
-            display_name = name_by_id.get(uid, f"user_{uid}")
+            display_name = name_by_id.get(uid, f"участник {uid}")
             shares_lines.append(f"  {display_name}: {share_val}{currency_suffix}")
         amount_str = format_money(amount, currency)
         await send(
@@ -322,14 +346,17 @@ async def propose_expense_from_intent(
         amount_str = format_money(amount, currency)
         problem_names = ambiguous + missing
         problem_desc = (
-            "Нашёл несколько вариантов" if ambiguous else "Не смог сопоставить"
+            "Нашёл несколько похожих имён" if ambiguous else "Не нашёл этих людей среди участников поездки"
         )
-        resolved_participants = ", ".join(name_by_id.get(uid, str(uid)) for uid in participants)
+        resolved_participants = _format_participants_compact(participants, name_by_id)
         await send(
             f"<b>{amount_str}</b>, {title}, оплатил {user.display_name}.\n\n"
             f"{problem_desc}: {', '.join(problem_names)}.\n"
+            "Проверь, что они нажали /join.\n"
+            "Или напиши:\n"
+            "<code>Трейв, 1200 рублей ужин на всех</code>\n"
             f"Сейчас в расходе: {resolved_participants}.\n"
-            f"Выбери участников вручную:",
+            "Можно выбрать участников кнопками ниже.",
             reply_markup=build_picker_kb(_PENDING[pid], pid),
         )
         return
@@ -355,17 +382,22 @@ async def propose_expense_from_intent(
     if mode == "self" or (len(participants) == 1 and participants[0] == user.id):
         participants_str = f"{user.display_name} (только тебя)"
     else:
-        participants_str = ", ".join(name_by_id.get(uid, str(uid)) for uid in participants)
+        participants_str = _format_participants_compact(participants, name_by_id)
     amount_str = format_money(amount, currency)
     per_person_raw = _per_person_share(amount, len(participants))
     per_person_line = ""
     if per_person_raw:
-        per_person_line = f"\nPer person: {format_money(per_person_raw, currency)}"
+        per_person_line = f"\nДоля: по {format_money(per_person_raw, currency)}"
     await send(
-        _trip_label_line(trip.title) +
-        f"Понял: <b>{amount_str}</b>, "
-        f"{title}, оплатил {user.display_name}, "
-        f"делим на: {participants_str}.{per_person_line} Добавить?",
+        _build_confirm_text(
+            trip_title=trip.title,
+            amount_str=amount_str,
+            title=title,
+            category=category,
+            payer_name=user.display_name,
+            participants_str=participants_str,
+            per_person_line=per_person_line,
+        ),
         reply_markup=build_confirm_kb(pid),
     )
 
@@ -399,7 +431,8 @@ async def cmd_add(message: Message):
     text = (message.text or "").partition(" ")[2].strip()
     if not text:
         await message.answer(
-            "Использование: <code>/add 1200 RUB ужин за всех</code>\n\n" + USAGE_HINT
+            "Напишите расход после команды. Например: "
+            "<code>/add 1200 RUB ужин на всех</code>\n\n" + USAGE_HINT
         )
         return
     from app.bot.intent_router import handle_intent_text
@@ -412,7 +445,8 @@ async def cmd_ai(message: Message):
     text = (message.text or "").partition(" ")[2].strip()
     if not text:
         await message.answer(
-            "Использование: <code>/ai я оплатил такси 300000 VND за всех</code>\n\n"
+            "Напишите расход после команды. Например: "
+            "<code>/ai я оплатил 3000 рублей за отель</code>\n\n"
             + USAGE_HINT
         )
         return
@@ -426,7 +460,8 @@ async def cmd_expense(message: Message):
     text = (message.text or "").partition(" ")[2].strip()
     if not text:
         await message.answer(
-            "Использование: <code>/expense 200 GEL ужин за всех</code>\n\n" + USAGE_HINT
+            "Напишите расход после команды. Например: "
+            "<code>/expense 200 GEL ужин на всех</code>\n\n" + USAGE_HINT
         )
         return
     from app.bot.intent_router import handle_intent_text
@@ -438,13 +473,26 @@ def _names_for(pending: PendingExpense) -> dict[int, str]:
     return {uid: label for uid, label in pending.available}
 
 
+def _format_participants_compact(
+    participant_ids: list[int],
+    names: dict[int, str],
+    *,
+    max_visible: int = 2,
+) -> str:
+    labels = [names.get(uid, str(uid)) for uid in participant_ids]
+    if len(labels) <= max_visible:
+        return ", ".join(labels)
+    visible = ", ".join(labels[:max_visible])
+    return f"{visible} и ещё {len(labels) - max_visible}"
+
+
 def _participants_str(pending: PendingExpense) -> str:
     names = _names_for(pending)
     payer = pending.payer_user_id
     if len(pending.participants) == 1 and pending.participants[0] == payer:
-        only = names.get(payer, f"user_{payer}")
-        return f"{only} (только тебя)"
-    return ", ".join(names.get(uid, str(uid)) for uid in pending.participants)
+        only = names.get(payer, f"участник {payer}")
+        return f"{only} (только ты)"
+    return _format_participants_compact(pending.participants, names)
 
 
 def _per_person_share(amount: str, participants_count: int) -> str | None:
@@ -458,7 +506,7 @@ def _per_person_share(amount: str, participants_count: int) -> str | None:
 
 
 def _trip_label_line(trip_title: str) -> str:
-    return f"Поездка: <b>{trip_title}</b>\n"
+    return f"<b>{trip_title}</b>\n"
 
 
 def _build_confirm_text(
@@ -469,12 +517,14 @@ def _build_confirm_text(
     payer_name: str,
     participants_str: str,
     per_person_line: str,
+    category: str | None = None,
 ) -> str:
     return (
-        _trip_label_line(trip_title)
-        + f"Понял: <b>{amount_str}</b>, "
-        + f"{title}, оплатил {payer_name}, "
-        + f"делим на: {participants_str}.{per_person_line} Добавить?"
+        "Проверь расход:\n\n"
+        + f"{title} — <b>{amount_str}</b>\n"
+        + f"Оплатил: {payer_name}\n"
+        + f"Делим на: {participants_str}"
+        + f"{per_person_line}"
     )
 
 
@@ -489,11 +539,44 @@ def _open_picker_view(pending: PendingExpense, pid: str) -> tuple[str, InlineKey
     return body, build_picker_kb(pending, pid)
 
 
+def _build_success_text(pending: PendingExpense, expense) -> str:
+    names = _names_for(pending)
+    shares = sorted(expense.shares, key=lambda share: names.get(share.user_id, ""))
+    share_lines: list[str] = []
+    for share in shares:
+        share_name = names.get(share.user_id) or f"участник {share.user_id}"
+        share_lines.append(
+            f"• {share_name}: {format_money(share.share_amount_base, expense.base_currency)}"
+        )
+    amount_line = format_dual(
+        expense.amount_original,
+        expense.currency_original,
+        expense.amount_base,
+        expense.base_currency,
+    )
+    payer_name = names.get(pending.payer_user_id) or f"участник {pending.payer_user_id}"
+    share_block = ""
+    if share_lines:
+        unique_shares = {line.split(": ", 1)[1] for line in share_lines}
+        if len(unique_shares) == 1:
+            share_block = f"Доля: по {next(iter(unique_shares))}"
+        else:
+            share_block = "Доли:\n" + "\n".join(share_lines)
+    return (
+        "Добавил расход:\n\n"
+        f"{pending.title} — <b>{amount_line}</b>\n"
+        f"Оплатил: {payer_name}\n"
+        f"Участники: {_participants_str(pending)}\n"
+        f"{share_block}\n\n"
+        + "\n\nБаланс: /balance"
+    )
+
+
 @router.callback_query(F.data.startswith("exp:"))
 async def on_callback(query: CallbackQuery):
     parts = query.data.split(":")
     if len(parts) < 3:
-        await query.answer("Bad payload")
+        await query.answer("Не получилось обработать кнопку")
         return
     action = parts[1]
     pid = parts[2]
@@ -525,7 +608,7 @@ async def on_callback(query: CallbackQuery):
         try:
             uid = int(extra or "0")
         except ValueError:
-            await query.answer("Bad id")
+            await query.answer("Не получилось выбрать участника")
             return
         if uid in pending.participants:
             pending.participants = [x for x in pending.participants if x != uid]
@@ -562,12 +645,18 @@ async def on_callback(query: CallbackQuery):
         per_person_line = ""
         if per_person_raw:
             per_person_line = (
-                f"\nPer person: {format_money(per_person_raw, pending.currency)}"
+                f"\nДоля: по {format_money(per_person_raw, pending.currency)}"
             )
         await query.message.edit_text(
-            _trip_label_line(pending.trip_title) +
-            f"Понял: <b>{amount_str}</b>, {pending.title}, оплатил {payer}, "
-            f"делим на: {_participants_str(pending)}.{per_person_line} Добавить?",
+            _build_confirm_text(
+                trip_title=pending.trip_title,
+                amount_str=amount_str,
+                title=pending.title,
+                category=pending.category,
+                payer_name=payer,
+                participants_str=_participants_str(pending),
+                per_person_line=per_person_line,
+            ),
             reply_markup=build_confirm_kb(pid),
         )
         await query.answer()
@@ -614,26 +703,22 @@ async def on_callback(query: CallbackQuery):
                     )
                 )
             except CurrencyError as exc:
-                await query.message.edit_text(f"Не удалось получить курс: {exc}")
+                await query.message.edit_text("Не удалось обновить курс валюты. Попробуйте позже.")
                 _PENDING.pop(pid, None)
                 await query.answer()
                 return
             except ValueError as exc:
-                await query.message.edit_text(f"Ошибка: {exc}")
+                await query.message.edit_text(f"Не удалось добавить расход: {exc}")
                 _PENDING.pop(pid, None)
                 await query.answer()
                 return
 
         _PENDING.pop(pid, None)
-        await query.message.edit_text(
-            f"✅ Расход добавлен: "
-            f"{format_dual(expense.amount_original, expense.currency_original, expense.amount_base, expense.base_currency)} "
-            f"({expense.title})"
-        )
+        await query.message.edit_text(_build_success_text(pending, expense))
         await query.answer()
         return
 
-    await query.answer("Unknown action")
+    await query.answer("Не получилось обработать кнопку")
 
 
 async def _resolve_trip(session, message: Message):

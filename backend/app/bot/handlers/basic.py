@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from aiogram import F, Router
+from aiogram import Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     InlineKeyboardButton,
@@ -23,7 +23,7 @@ def _miniapp_kb() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="📱 Открыть Mini App",
+                    text="Открыть Mini App",
                     web_app=WebAppInfo(url=settings.mini_app_url),
                 )
             ]
@@ -31,35 +31,74 @@ def _miniapp_kb() -> InlineKeyboardMarkup:
     )
 
 
-HELP_TEXT = (
-    "<b>Yo — помощник в групповых поездках</b>\n\n"
-    "<b>Поездки</b>\n"
-    "/newtrip Название — создать поездку\n"
-    "/trips — список поездок\n"
-    "/rename Новое название — переименовать активную\n"
-    "/setlocalcurrency TRY — валюта страны (для отображения)\n"
-    "/setdisplaycurrency RUB — валюта расчётов (только до первого расхода)\n"
-    "/balance — кто кому должен\n"
-    "/summary — итоги поездки (всего, по категориям, кто кому должен)\n\n"
-    "<b>Расходы</b>\n"
-    "/add 1200 RUB ужин за всех — структурированный ввод\n"
-    "/ai я оплатил такси 300000 VND за всех — свободная фраза\n"
-    "/expense 100 THB Coffee — короткий ввод\n"
-    "Любой расход проходит через подтверждение Да/Изменить/Отмена.\n\n"
-    "<b>Валюта и документы</b>\n"
-    "/rate 100 USD RUB — конвертация валют\n"
-    "/docs или /docs hotel — поиск документов\n\n"
-    "<b>Mini App</b>\n"
-    "/app — открыть Mini App\n\n"
-    "<b>В группе</b>\n"
-    "Бот реагирует только на команды, reply на бота и упоминания.\n"
-    "Если @mention не срабатывает (privacy mode Telegram), используй /ai или /expense.\n"
-    "Reply на сообщение бота тоже работает.\n\n"
-    "<b>Участники расхода</b>\n"
-    "Если бот не понял кого включить (например, «Зои» не в участниках),\n"
-    "откроется picker — нажми галочки или используй 👥 Все / 🙋 Только я.\n"
-    "В confirmation можно нажать ✏️ Изменить и выбрать заново."
+EXPENSE_EXAMPLES = (
+    "<code>Трейв, 500 рублей такси</code>\n"
+    "<code>Трейв, 1200 TRY ужин на всех</code>\n"
+    "<code>Трейв, 30 евро музей с Антоном и Машей</code>\n"
+    "<code>Трейв, я оплатил 3000 рублей за отель</code>"
 )
+
+
+GROUP_HELP_TEXT = (
+    "<b>Как пользоваться Трейвом</b>\n\n"
+    "1. Присоединиться к поездке:\n"
+    "<code>/join</code>\n\n"
+    "2. Добавить расход:\n"
+    "<code>Трейв, 500 рублей такси</code>\n"
+    "<code>Трейв, 1200 TRY ужин на всех</code>\n"
+    "<code>Трейв, 30 евро музей с Антоном и Машей</code>\n\n"
+    "3. Посмотреть:\n"
+    "Баланс — /balance\n"
+    "Участники — /members\n"
+    "История и аналитика — /app"
+)
+
+
+PRIVATE_HELP_TEXT = (
+    "<b>Трейв помогает считать расходы в поездках</b>\n\n"
+    "Быстрый старт:\n"
+    "1. Добавь меня в групповой чат.\n"
+    "2. Создай поездку: <code>/newtrip</code>\n"
+    "3. Участники нажимают <code>/join</code>\n"
+    "4. Пиши расходы обычным текстом.\n\n"
+    "<b>Примеры трат</b>\n"
+    f"{EXPENSE_EXAMPLES}\n\n"
+    "<b>Команды:</b>\n"
+    "/balance — кто кому должен\n"
+    "/members — участники поездки\n"
+    "/app — история и аналитика\n"
+    "/help — помощь"
+)
+
+
+PRIVATE_START_TEXT = (
+    "Привет! Я Трейв — бот для расходов в поездках.\n\n"
+    "Как начать:\n"
+    "1. Добавь меня в групповой чат поездки.\n"
+    "2. Создай поездку: <code>/newtrip</code>\n"
+    "3. Попроси участников нажать <code>/join</code>.\n"
+    "4. Пиши расходы обычным текстом.\n\n"
+    "Пример:\n"
+    "<code>Трейв, 500 рублей такси</code>\n\n"
+    "История, баланс и аналитика: /app\n"
+    "Помощь: /help"
+)
+
+
+GROUP_START_TEXT = (
+    "Я Трейв — помогу считать расходы в поездке.\n\n"
+    "Чтобы начать:\n"
+    "1. Создайте поездку: <code>/newtrip</code>\n"
+    "2. Каждый участник нажимает <code>/join</code>\n"
+    "3. Потом пишите расходы прямо в чат:\n\n"
+    "<code>Трейв, 500 рублей такси</code>\n"
+    "<code>Трейв, 1200 TRY ужин на всех</code>\n\n"
+    "Помощь: /help"
+)
+
+
+def _is_group_chat(message: Message) -> bool:
+    return message.chat.type in {"group", "supergroup"}
 
 
 @router.message(CommandStart())
@@ -72,20 +111,23 @@ async def cmd_start(message: Message):
             last_name=message.from_user.last_name,
         )
     await message.answer(
-        "Привет! Я помогаю отслеживать общие расходы, валюты и документы поездки.\n\n"
-        "Открой Mini App или напиши /help.",
+        GROUP_START_TEXT if _is_group_chat(message) else PRIVATE_START_TEXT,
         reply_markup=_miniapp_kb(),
     )
 
 
 @router.message(Command("help"))
 async def cmd_help(message: Message):
-    await message.answer(HELP_TEXT, reply_markup=_miniapp_kb())
+    text = GROUP_HELP_TEXT if _is_group_chat(message) else PRIVATE_HELP_TEXT
+    await message.answer(text, reply_markup=_miniapp_kb())
 
 
 @router.message(Command("app"))
 async def cmd_app(message: Message):
-    await message.answer("Открыть Mini App:", reply_markup=_miniapp_kb())
+    await message.answer(
+        "Mini App: история расходов, баланс, аналитика, фильтры и редактирование.",
+        reply_markup=_miniapp_kb(),
+    )
 
 
 @router.message(Command("rate"))

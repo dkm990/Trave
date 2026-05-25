@@ -8,7 +8,7 @@ AIProvider, и роутит результат:
 - convert_currency → CurrencyService
 - find_document → DocumentService
 - get_weather → WeatherService (Open-Meteo, бесплатно)
-- unknown → подсказка с примерами
+- unknown → conversational AI
 """
 from __future__ import annotations
 
@@ -156,7 +156,7 @@ async def handle_intent_text(
 ) -> bool:
     """Распознать intent и выполнить соответствующее действие.
 
-    Returns True если intent обработан (даже unknown с подсказкой),
+    Returns True если intent обработан (включая unknown/chat),
     False — если text пустой/None.
 
     `source`: 'add' | 'ai' | 'expense' | 'mention' | 'reply' | 'trigger' | 'private'.
@@ -287,7 +287,12 @@ async def _show_balance(message: Message, send) -> None:
     async with session_scope() as session:
         trip = await _resolve_active_trip(session, message)
         if not trip:
-            await send("Нет активной поездки. /newtrip Название")
+            await send(
+                "В этом чате пока нет поездки.\n\n"
+                "Создайте её командой:\n"
+                "<code>/newtrip</code>\n\n"
+                "После этого участники смогут нажать /join."
+            )
             return
         balances = await BalanceService(session).calculate_balances(trip.id)
         transfers = simplify_debts(balances)
@@ -297,7 +302,7 @@ async def _show_balance(message: Message, send) -> None:
         await send(f"<b>{trip.title}</b>: расходов пока нет.")
         return
 
-    name_by_id = {m.user_id: (m.display_name or f"user_{m.user_id}") for m in members}
+    name_by_id = {m.user_id: (m.display_name or f"участник {m.user_id}") for m in members}
     cur = trip.default_currency
     bal_lines = "\n".join(
         f"• {name_by_id.get(b.user_id, b.user_id)}: оплатил {format_money(b.paid, cur)}, "
@@ -319,7 +324,12 @@ async def _show_today_spending(message: Message, send) -> None:
     async with session_scope() as session:
         trip = await _resolve_active_trip(session, message)
         if not trip:
-            await send("Нет активной поездки. /newtrip Название")
+            await send(
+                "В этом чате пока нет поездки.\n\n"
+                "Создайте её командой:\n"
+                "<code>/newtrip</code>\n\n"
+                "После этого участники смогут нажать /join."
+            )
             return
         summary = await ExpenseService(session, CurrencyService(session)).today_summary(
             trip.id
@@ -397,7 +407,12 @@ async def _find_document(message: Message, intent: Intent, send) -> None:
     async with session_scope() as session:
         trip = await _resolve_active_trip(session, message)
         if not trip:
-            await send("Нет активной поездки.")
+            await send(
+                "В этом чате пока нет поездки.\n\n"
+                "Создайте её командой:\n"
+                "<code>/newtrip</code>\n\n"
+                "После этого участники смогут нажать /join."
+            )
             return
         user = await UserService(session).get_by_telegram_id(message.from_user.id)
         if not user:
