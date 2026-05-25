@@ -16,10 +16,13 @@ class _DummyScope:
 
 
 class _DummyMessage:
-    def __init__(self, chat_type: str):
+    def __init__(self, chat_type: str, bot=None):
         self.chat = SimpleNamespace(type=chat_type)
         self.from_user = SimpleNamespace(
             id=1, username="tester", first_name="Test", last_name="User"
+        )
+        self.bot = bot or SimpleNamespace(
+            get_me=lambda: None
         )
         self.answers: list[tuple[str, object | None]] = []
 
@@ -111,7 +114,11 @@ async def test_app_private_returns_webapp_markup(monkeypatch):
 async def test_app_group_returns_url_button_without_webapp():
     from app.bot.handlers import basic
 
-    msg = _DummyMessage("group")
+    class _Bot:
+        async def get_me(self):
+            return SimpleNamespace(username="TravelBot")
+
+    msg = _DummyMessage("group", bot=_Bot())
     await basic.cmd_app(msg)
 
     assert len(msg.answers) == 1
@@ -122,8 +129,23 @@ async def test_app_group_returns_url_button_without_webapp():
     )
     assert isinstance(markup, InlineKeyboardMarkup)
     assert markup.inline_keyboard[0][0].text == "Открыть в личке"
-    assert markup.inline_keyboard[0][0].url == "https://t.me/TrayeOBot?start=app"
+    assert markup.inline_keyboard[0][0].url == "https://t.me/TravelBot?start=app"
+    assert "TrayeOBot" not in markup.inline_keyboard[0][0].url
     assert markup.inline_keyboard[0][0].web_app is None
+
+
+@pytest.mark.asyncio
+async def test_app_group_without_username_falls_back_to_text_only():
+    from app.bot.handlers import basic
+
+    class _Bot:
+        async def get_me(self):
+            return SimpleNamespace(username="")
+
+    msg = _DummyMessage("group", bot=_Bot())
+    await basic.cmd_app(msg)
+
+    assert msg.answers == [("Открой личку с ботом и нажми /app.", None)]
 
 
 def test_group_help_is_short_and_actionable():

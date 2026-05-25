@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from aiogram import Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
@@ -15,7 +17,7 @@ from app.services.formatting import format_money
 from app.services.user_service import UserService
 
 router = Router(name="basic")
-GROUP_APP_DEEP_LINK = "https://t.me/TrayeOBot?start=app"
+logger = logging.getLogger(__name__)
 
 
 def _miniapp_kb() -> InlineKeyboardMarkup:
@@ -32,12 +34,30 @@ def _miniapp_kb() -> InlineKeyboardMarkup:
     )
 
 
-def _group_app_kb() -> InlineKeyboardMarkup:
+def _group_app_kb(username: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Открыть в личке", url=GROUP_APP_DEEP_LINK)]
+            [
+                InlineKeyboardButton(
+                    text="Открыть в личке",
+                    url=f"https://t.me/{username}?start=app",
+                )
+            ]
         ]
     )
+
+
+async def _group_app_link_kb(message: Message) -> InlineKeyboardMarkup | None:
+    try:
+        bot_info = await message.bot.get_me()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to resolve bot username for group /app: %s", exc)
+        return None
+    username = (bot_info.username or "").strip()
+    if not username:
+        logger.warning("Bot username is empty for group /app")
+        return None
+    return _group_app_kb(username)
 
 
 EXPENSE_EXAMPLES = (
@@ -141,10 +161,14 @@ async def cmd_help(message: Message):
 @router.message(Command("app"))
 async def cmd_app(message: Message):
     if _is_group_chat(message):
+        kb = await _group_app_link_kb(message)
+        if kb is None:
+            await message.answer("Открой личку с ботом и нажми /app.")
+            return
         await message.answer(
             "Mini App открывается в личке с ботом.\n\n"
             "Нажми кнопку ниже, потом открой приложение.",
-            reply_markup=_group_app_kb(),
+            reply_markup=kb,
         )
         return
     await message.answer(
