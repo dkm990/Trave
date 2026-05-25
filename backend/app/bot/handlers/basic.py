@@ -101,6 +101,13 @@ def _is_group_chat(message: Message) -> bool:
     return message.chat.type in {"group", "supergroup"}
 
 
+def _command_kb(message: Message) -> InlineKeyboardMarkup | None:
+    # Telegram does not allow web_app buttons in group chats.
+    if _is_group_chat(message):
+        return None
+    return _miniapp_kb()
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     async with session_scope() as session:
@@ -112,21 +119,21 @@ async def cmd_start(message: Message):
         )
     await message.answer(
         GROUP_START_TEXT if _is_group_chat(message) else PRIVATE_START_TEXT,
-        reply_markup=_miniapp_kb(),
+        reply_markup=_command_kb(message),
     )
 
 
 @router.message(Command("help"))
 async def cmd_help(message: Message):
     text = GROUP_HELP_TEXT if _is_group_chat(message) else PRIVATE_HELP_TEXT
-    await message.answer(text, reply_markup=_miniapp_kb())
+    await message.answer(text, reply_markup=_command_kb(message))
 
 
 @router.message(Command("app"))
 async def cmd_app(message: Message):
     await message.answer(
         "Mini App: история расходов, баланс, аналитика, фильтры и редактирование.",
-        reply_markup=_miniapp_kb(),
+        reply_markup=_command_kb(message),
     )
 
 

@@ -3,6 +3,94 @@ from __future__ import annotations
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
+
+
+class _DummyScope:
+    async def __aenter__(self):
+        return object()
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _DummyMessage:
+    def __init__(self, chat_type: str):
+        self.chat = SimpleNamespace(type=chat_type)
+        self.from_user = SimpleNamespace(
+            id=1, username="tester", first_name="Test", last_name="User"
+        )
+        self.answers: list[tuple[str, object | None]] = []
+
+    async def answer(self, text: str, reply_markup=None):
+        self.answers.append((text, reply_markup))
+
+
+@pytest.mark.asyncio
+async def test_start_group_returns_group_text_without_webapp(monkeypatch):
+    from app.bot.handlers import basic
+
+    class _UserService:
+        def __init__(self, session):
+            self.session = session
+
+        async def get_or_create(self, **kwargs):
+            return SimpleNamespace(id=1)
+
+    monkeypatch.setattr(basic, "session_scope", lambda: _DummyScope())
+    monkeypatch.setattr(basic, "UserService", _UserService)
+    monkeypatch.setattr(basic, "_miniapp_kb", lambda: "KB")
+    msg = _DummyMessage("group")
+
+    await basic.cmd_start(msg)
+
+    assert msg.answers == [(basic.GROUP_START_TEXT, None)]
+
+
+@pytest.mark.asyncio
+async def test_start_private_returns_private_text_with_webapp(monkeypatch):
+    from app.bot.handlers import basic
+
+    class _UserService:
+        def __init__(self, session):
+            self.session = session
+
+        async def get_or_create(self, **kwargs):
+            return SimpleNamespace(id=1)
+
+    monkeypatch.setattr(basic, "session_scope", lambda: _DummyScope())
+    monkeypatch.setattr(basic, "UserService", _UserService)
+    monkeypatch.setattr(basic, "_miniapp_kb", lambda: "KB")
+    msg = _DummyMessage("private")
+
+    await basic.cmd_start(msg)
+
+    assert msg.answers == [(basic.PRIVATE_START_TEXT, "KB")]
+
+
+@pytest.mark.asyncio
+async def test_help_group_returns_group_text_without_webapp(monkeypatch):
+    from app.bot.handlers import basic
+
+    monkeypatch.setattr(basic, "_miniapp_kb", lambda: "KB")
+    msg = _DummyMessage("group")
+
+    await basic.cmd_help(msg)
+
+    assert msg.answers == [(basic.GROUP_HELP_TEXT, None)]
+
+
+@pytest.mark.asyncio
+async def test_help_private_returns_private_text_with_webapp(monkeypatch):
+    from app.bot.handlers import basic
+
+    monkeypatch.setattr(basic, "_miniapp_kb", lambda: "KB")
+    msg = _DummyMessage("private")
+
+    await basic.cmd_help(msg)
+
+    assert msg.answers == [(basic.PRIVATE_HELP_TEXT, "KB")]
+
 
 def test_group_help_is_short_and_actionable():
     from app.bot.handlers.basic import GROUP_HELP_TEXT
