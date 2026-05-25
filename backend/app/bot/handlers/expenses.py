@@ -348,15 +348,15 @@ async def propose_expense_from_intent(
         problem_desc = (
             "Нашёл несколько похожих имён" if ambiguous else "Не нашёл этих людей среди участников поездки"
         )
-        resolved_participants = ", ".join(name_by_id.get(uid, str(uid)) for uid in participants)
+        resolved_participants = _format_participants_compact(participants, name_by_id)
         await send(
             f"<b>{amount_str}</b>, {title}, оплатил {user.display_name}.\n\n"
             f"{problem_desc}: {', '.join(problem_names)}.\n"
-            "Проверьте, что они нажали /join,\n"
-            "или напишите:\n"
-            "<code>Трейв, 1200 рублей ужин на всех</code>\n\n"
+            "Проверь, что они нажали /join.\n"
+            "Или напиши:\n"
+            "<code>Трейв, 1200 рублей ужин на всех</code>\n"
             f"Сейчас в расходе: {resolved_participants}.\n"
-            "Можно выбрать участников вручную:",
+            "Можно выбрать участников кнопками ниже.",
             reply_markup=build_picker_kb(_PENDING[pid], pid),
         )
         return
@@ -382,7 +382,7 @@ async def propose_expense_from_intent(
     if mode == "self" or (len(participants) == 1 and participants[0] == user.id):
         participants_str = f"{user.display_name} (только тебя)"
     else:
-        participants_str = ", ".join(name_by_id.get(uid, str(uid)) for uid in participants)
+        participants_str = _format_participants_compact(participants, name_by_id)
     amount_str = format_money(amount, currency)
     per_person_raw = _per_person_share(amount, len(participants))
     per_person_line = ""
@@ -473,13 +473,26 @@ def _names_for(pending: PendingExpense) -> dict[int, str]:
     return {uid: label for uid, label in pending.available}
 
 
+def _format_participants_compact(
+    participant_ids: list[int],
+    names: dict[int, str],
+    *,
+    max_visible: int = 2,
+) -> str:
+    labels = [names.get(uid, str(uid)) for uid in participant_ids]
+    if len(labels) <= max_visible:
+        return ", ".join(labels)
+    visible = ", ".join(labels[:max_visible])
+    return f"{visible} и ещё {len(labels) - max_visible}"
+
+
 def _participants_str(pending: PendingExpense) -> str:
     names = _names_for(pending)
     payer = pending.payer_user_id
     if len(pending.participants) == 1 and pending.participants[0] == payer:
         only = names.get(payer, f"участник {payer}")
         return f"{only} (только ты)"
-    return ", ".join(names.get(uid, str(uid)) for uid in pending.participants)
+    return _format_participants_compact(pending.participants, names)
 
 
 def _per_person_share(amount: str, participants_count: int) -> str | None:

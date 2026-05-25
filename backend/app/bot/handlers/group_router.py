@@ -48,8 +48,8 @@ def _format_group_trips_message(active_trip, chat_trips: list) -> str:
 def _format_members_message(trip, members: list) -> str:
     if not members:
         return (
-            f"В поездке <b>{trip.title}</b> пока нет участников.\n"
-            "Попросите участников нажать /join."
+            "Пока не вижу участников поездки.\n"
+            "Попроси участников нажать /join."
         )
 
     lines = [f"<b>Участники поездки {trip.title}</b>"]
@@ -154,7 +154,7 @@ async def group_new_trip(message: Message):
     await message.answer(
         f"Поездка <b>{trip.title}</b> создана.\n\n"
         "Теперь:\n"
-        "1. Участники нажимают /join\n"
+        "1. Каждый участник нажимает /join\n"
         "2. Добавляйте расходы в чат, например:\n"
         "<code>Трейв, 500 рублей такси</code>\n\n"
         "Посмотреть: /balance, /members, /app"

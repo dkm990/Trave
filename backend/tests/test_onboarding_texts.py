@@ -21,10 +21,19 @@ def test_private_help_explains_full_flow():
     from app.bot.handlers.basic import PRIVATE_HELP_TEXT
 
     assert "Добавь меня в групповой чат" in PRIVATE_HELP_TEXT
+    assert "Пиши расходы обычным текстом" in PRIVATE_HELP_TEXT
+    assert "<b>Команды:</b>" in PRIVATE_HELP_TEXT
     assert "/newtrip" in PRIVATE_HELP_TEXT
     assert "/join" in PRIVATE_HELP_TEXT
     assert "/app — история и аналитика" in PRIVATE_HELP_TEXT
     assert "Трейв, я оплатил 3000 рублей за отель" in PRIVATE_HELP_TEXT
+
+
+def test_private_start_uses_clear_next_step_language():
+    from app.bot.handlers.basic import PRIVATE_START_TEXT
+
+    assert "Пиши расходы обычным текстом." in PRIVATE_START_TEXT
+    assert "История, баланс и аналитика: /app" in PRIVATE_START_TEXT
 
 
 def test_user_texts_do_not_expose_internal_terms():
@@ -61,6 +70,16 @@ def test_members_message_points_to_join():
     assert "Участники поездки Турция" in text
     assert "Антон" in text
     assert "/join" in text
+
+
+def test_members_empty_message_is_safe_and_clear():
+    from app.bot.handlers.group_router import _format_members_message
+
+    trip = SimpleNamespace(title="Турция")
+    text = _format_members_message(trip, [])
+
+    assert "Пока не вижу участников поездки." in text
+    assert "Попроси участников нажать /join." in text
 
 
 def test_expense_confirmation_has_human_summary():
