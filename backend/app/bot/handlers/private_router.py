@@ -17,18 +17,22 @@ router.message.filter(F.chat.type == ChatType.PRIVATE)
 
 def _format_my_trips_message(trips: list) -> str:
     if not trips:
-        return "Поездок ещё нет. Создать: <code>/newtrip Название</code>"
+        return (
+            "У вас пока нет поездок.\n"
+            "Обычно поездку создают в групповом чате: "
+            "<code>/newtrip Название поездки</code>."
+        )
     lines = [f"• <b>{t.title}</b> ({t.default_currency}) — id {t.id}" for t in trips]
     lines.append("")
-    lines.append("Для группы: /bindtrip TRIP_ID")
-    return "Твои поездки:\n" + "\n".join(lines)
+    lines.append("Чтобы выбрать поездку в группе, напишите там: /bindtrip TRIP_ID")
+    return "Ваши поездки:\n" + "\n".join(lines)
 
 
 @router.message(Command("newtrip"))
 async def cmd_new_trip_private(message: Message):
     title = (message.text or "").partition(" ")[2].strip()
     if not title:
-        await message.answer("Укажи название: <code>/newtrip Грузия 2025</code>")
+        await message.answer("Укажите название: <code>/newtrip Грузия 2025</code>")
         return
     async with session_scope() as session:
         user = await UserService(session).get_or_create(
@@ -38,7 +42,12 @@ async def cmd_new_trip_private(message: Message):
             last_name=message.from_user.last_name,
         )
         trip = await TripService(session).create_trip(title=title, owner=user)
-    await message.answer(f"Поездка создана: <b>{trip.title}</b> (id={trip.id})")
+    await message.answer(
+        f"Поездка <b>{trip.title}</b> создана.\n\n"
+        "Чтобы считать расходы вместе, добавьте бота в групповой чат и "
+        f"выберите эту поездку там: <code>/bindtrip {trip.id}</code>.\n"
+        "Участники добавляются командой /join в группе."
+    )
 
 
 @router.message(Command("trips"))
@@ -49,6 +58,39 @@ async def cmd_trips(message: Message):
 @router.message(Command("mytrips"))
 async def cmd_my_trips(message: Message):
     await _send_user_trips(message)
+
+
+@router.message(Command("members"))
+async def cmd_members_private(message: Message):
+    async with session_scope() as session:
+        user = await UserService(session).get_or_create(
+            telegram_user_id=message.from_user.id,
+            username=message.from_user.username,
+            first_name=message.from_user.first_name,
+            last_name=message.from_user.last_name,
+        )
+        trip_svc = TripService(session)
+        trips = await trip_svc.list_user_trips(user.id)
+        if not trips:
+            await message.answer(
+                "У вас пока нет поездок. В группе создайте поездку командой "
+                "<code>/newtrip Название поездки</code>."
+            )
+            return
+        trip = trips[0]
+        members = await trip_svc.get_members(trip.id)
+
+    lines = [f"<b>Участники поездки {trip.title}</b>"]
+    if members:
+        for member in members:
+            role = "создатель" if member.role == "owner" else "участник"
+            name = member.display_name or f"участник {member.user_id}"
+            lines.append(f"• {name} — {role}")
+    else:
+        lines.append("Пока никого нет.")
+    lines.append("")
+    lines.append("В группе новый участник может добавиться командой /join.")
+    await message.answer("\n".join(lines))
 
 
 async def _send_user_trips(message: Message):
@@ -68,22 +110,33 @@ async def cmd_balance_private(message: Message):
     async with session_scope() as session:
         user = await UserService(session).get_by_telegram_id(message.from_user.id)
         if not user:
-            await message.answer("Сначала создай поездку: /newtrip")
+            await message.answer(
+                "Сначала создайте поездку в группе: "
+                "<code>/newtrip Название поездки</code>."
+            )
             return
         trips = await TripService(session).list_user_trips(user.id)
         if not trips:
-            await message.answer("Нет активных поездок.")
+            await message.answer(
+                "У вас пока нет поездок. В группе создайте поездку командой "
+                "<code>/newtrip Название поездки</code>."
+            )
             return
         trip = trips[0]
         balances = await BalanceService(session).calculate_balances(trip.id)
         transfers = simplify_debts(balances)
         members = await TripService(session).get_members(trip.id)
 
-    name_by_id = {m.user_id: (m.display_name or f"user_{m.user_id}") for m in members}
+    name_by_id = {m.user_id: (m.display_name or f"участник {m.user_id}") for m in members}
     cur = trip.default_currency
     head = f"<b>{trip.title}</b> · база {cur}\n"
     if not balances:
-        await message.answer(head + "Расходов нет.")
+        await message.answer(
+            head
+            + "Расходов пока нет.\n"
+            + "Добавьте первый расход в группе, например: "
+            + "<code>Трейв, 500 рублей такси</code>."
+        )
         return
 
     bal_lines = "\n".join(
