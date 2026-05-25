@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from app.bot import build_bot, build_dispatcher
+from app.bot import build_bot, build_dispatcher, setup_bot_commands
 from app.database import init_db
 
 
@@ -21,6 +21,7 @@ async def main() -> None:
     log_startup_report("bot")
     await init_db()
     bot = build_bot()
+    await setup_bot_commands(bot)
     dp = build_dispatcher()
     me = await bot.me()
     logging.info("Bot @%s started in polling mode", me.username)
