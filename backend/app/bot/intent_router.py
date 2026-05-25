@@ -288,9 +288,10 @@ async def _show_balance(message: Message, send) -> None:
         trip = await _resolve_active_trip(session, message)
         if not trip:
             await send(
-                "В этом чате ещё нет активной поездки.\n"
-                "Создайте её командой <code>/newtrip Название поездки</code>, "
-                "потом участники пишут /join."
+                "В этом чате пока нет поездки.\n\n"
+                "Создайте её командой:\n"
+                "<code>/newtrip</code>\n\n"
+                "После этого участники смогут нажать /join."
             )
             return
         balances = await BalanceService(session).calculate_balances(trip.id)
@@ -324,9 +325,10 @@ async def _show_today_spending(message: Message, send) -> None:
         trip = await _resolve_active_trip(session, message)
         if not trip:
             await send(
-                "В этом чате ещё нет активной поездки.\n"
-                "Создайте её командой <code>/newtrip Название поездки</code>, "
-                "потом участники пишут /join."
+                "В этом чате пока нет поездки.\n\n"
+                "Создайте её командой:\n"
+                "<code>/newtrip</code>\n\n"
+                "После этого участники смогут нажать /join."
             )
             return
         summary = await ExpenseService(session, CurrencyService(session)).today_summary(
@@ -406,8 +408,10 @@ async def _find_document(message: Message, intent: Intent, send) -> None:
         trip = await _resolve_active_trip(session, message)
         if not trip:
             await send(
-                "В этом чате ещё нет активной поездки.\n"
-                "Создайте её командой <code>/newtrip Название поездки</code>."
+                "В этом чате пока нет поездки.\n\n"
+                "Создайте её командой:\n"
+                "<code>/newtrip</code>\n\n"
+                "После этого участники смогут нажать /join."
             )
             return
         user = await UserService(session).get_by_telegram_id(message.from_user.id)

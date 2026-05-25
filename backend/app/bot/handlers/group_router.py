@@ -49,7 +49,7 @@ def _format_members_message(trip, members: list) -> str:
     if not members:
         return (
             f"В поездке <b>{trip.title}</b> пока нет участников.\n"
-            "Чтобы присоединиться, напишите /join."
+            "Попросите участников нажать /join."
         )
 
     lines = [f"<b>Участники поездки {trip.title}</b>"]
@@ -152,13 +152,12 @@ async def group_new_trip(message: Message):
             title=title, owner=user, telegram_chat_id=message.chat.id
         )
     await message.answer(
-        f"Поездка <b>{trip.title}</b> создана и стала активной для этого чата.\n\n"
-        "Что дальше:\n"
-        "1. Каждый участник пишет /join.\n"
-        "2. Добавляйте траты обычным текстом: "
-        "<code>Трейв, 500 рублей такси</code>\n"
-        "3. Команды: /balance, /members, /app.\n\n"
-        "Список поездок: /trips."
+        f"Поездка <b>{trip.title}</b> создана.\n\n"
+        "Теперь:\n"
+        "1. Участники нажимают /join\n"
+        "2. Добавляйте расходы в чат, например:\n"
+        "<code>Трейв, 500 рублей такси</code>\n\n"
+        "Посмотреть: /balance, /members, /app"
     )
 
 
@@ -187,8 +186,8 @@ async def group_bind_trip(message: Message):
             return
         await trip_svc.bind_to_chat(trip, message.chat.id)
     await message.answer(
-        f"Поездка <b>{trip.title}</b> стала активной для этой группы.\n"
-        "Если вы ещё не участник этой поездки, напишите /join."
+        f"Готово, выбрана поездка <b>{trip.title}</b>.\n"
+        "Если вы ещё не в поездке, нажмите /join."
     )
 
 
@@ -199,8 +198,10 @@ async def group_join(message: Message):
         trip = await trip_svc.get_trip_for_chat(message.chat.id)
         if not trip:
             await message.answer(
-                "В этой группе ещё нет активной поездки.\n"
-                "Создайте её командой <code>/newtrip Название поездки</code>."
+                "В этом чате пока нет поездки.\n\n"
+                "Создайте её командой:\n"
+                "<code>/newtrip</code>\n\n"
+                "После этого участники смогут нажать /join."
             )
             return
         user = await UserService(session).get_or_create(
@@ -214,13 +215,15 @@ async def group_join(message: Message):
         await trip_svc.add_member(trip, user)
     if was_member:
         await message.answer(
-            f"{user.display_name}, вы уже в поездке <b>{trip.title}</b>.\n"
-            "Можно добавлять траты или смотреть баланс: /balance"
+            "Ты уже в этой поездке.\n\n"
+            "Добавить расход можно так:\n"
+            "<code>Трейв, 500 рублей такси</code>"
         )
         return
     await message.answer(
-        f"{user.display_name}, вы присоединились к поездке <b>{trip.title}</b>.\n"
-        "Теперь бот сможет учитывать вас в расходах."
+        "Готово, ты в поездке.\n\n"
+        "Теперь можешь добавлять расходы:\n"
+        "<code>Трейв, 500 рублей такси</code>"
     )
 
 
@@ -231,8 +234,10 @@ async def group_members(message: Message):
         trip = await trip_svc.get_trip_for_chat(message.chat.id)
         if not trip:
             await message.answer(
-                "В этой группе ещё нет активной поездки.\n"
-                "Создайте её командой <code>/newtrip Название поездки</code>."
+                "В этом чате пока нет поездки.\n\n"
+                "Создайте её командой:\n"
+                "<code>/newtrip</code>\n\n"
+                "После этого участники смогут нажать /join."
             )
             return
         members = await trip_svc.get_members(trip.id)
@@ -245,8 +250,10 @@ async def group_balance(message: Message):
         trip = await TripService(session).get_trip_for_chat(message.chat.id)
         if not trip:
             await message.answer(
-                "В этой группе ещё нет активной поездки.\n"
-                "Создайте её командой <code>/newtrip Название поездки</code>."
+                "В этом чате пока нет поездки.\n\n"
+                "Создайте её командой:\n"
+                "<code>/newtrip</code>\n\n"
+                "После этого участники смогут нажать /join."
             )
             return
         balances = await BalanceService(session).calculate_balances(trip.id)
@@ -254,9 +261,9 @@ async def group_balance(message: Message):
         members = await TripService(session).get_members(trip.id)
     if not balances:
         await message.answer(
-            f"<b>{trip.title}</b>: расходов пока нет.\n"
-            "Добавьте первый расход, например: "
-            "<code>Трейв, 500 рублей такси</code>."
+            "Расходов пока нет.\n\n"
+            "Добавьте первый расход:\n"
+            "<code>Трейв, 500 рублей такси</code>"
         )
         return
     name_by_id = {m.user_id: (m.display_name or f"участник {m.user_id}") for m in members}

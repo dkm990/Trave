@@ -7,12 +7,12 @@ from types import SimpleNamespace
 def test_group_help_is_short_and_actionable():
     from app.bot.handlers.basic import GROUP_HELP_TEXT
 
-    assert "/newtrip" in GROUP_HELP_TEXT
     assert "/join" in GROUP_HELP_TEXT
     assert "/balance" in GROUP_HELP_TEXT
     assert "/members" in GROUP_HELP_TEXT
     assert "/app" in GROUP_HELP_TEXT
     assert "Трейв, 500 рублей такси" in GROUP_HELP_TEXT
+    assert "Трейв, 1200 TRY ужин на всех" in GROUP_HELP_TEXT
     assert "/setdisplaycurrency" not in GROUP_HELP_TEXT
     assert "/rename" not in GROUP_HELP_TEXT
 
@@ -20,25 +20,32 @@ def test_group_help_is_short_and_actionable():
 def test_private_help_explains_full_flow():
     from app.bot.handlers.basic import PRIVATE_HELP_TEXT
 
-    assert "Добавьте бота в групповой чат" in PRIVATE_HELP_TEXT
+    assert "Добавь меня в групповой чат" in PRIVATE_HELP_TEXT
     assert "/newtrip" in PRIVATE_HELP_TEXT
     assert "/join" in PRIVATE_HELP_TEXT
-    assert "история, аналитика" in PRIVATE_HELP_TEXT
+    assert "/app — история и аналитика" in PRIVATE_HELP_TEXT
     assert "Трейв, я оплатил 3000 рублей за отель" in PRIVATE_HELP_TEXT
-    assert "/bindtrip ID" in PRIVATE_HELP_TEXT
 
 
 def test_user_texts_do_not_expose_internal_terms():
-    from app.bot.handlers.basic import GROUP_HELP_TEXT, GROUP_START_TEXT, PRIVATE_HELP_TEXT
+    from app.bot.handlers.basic import (
+        GROUP_HELP_TEXT,
+        GROUP_START_TEXT,
+        PRIVATE_HELP_TEXT,
+        PRIVATE_START_TEXT,
+    )
     from app.bot.handlers.expenses import USAGE_HINT
 
-    text = "\n".join([GROUP_HELP_TEXT, PRIVATE_HELP_TEXT, GROUP_START_TEXT, USAGE_HINT])
+    text = "\n".join(
+        [GROUP_HELP_TEXT, PRIVATE_HELP_TEXT, GROUP_START_TEXT, PRIVATE_START_TEXT, USAGE_HINT]
+    )
     forbidden = [
         "TripMember",
         "active_trip",
         "parser error",
         "normalized currency",
         "needs_confirmation",
+        "intent",
     ]
     for term in forbidden:
         assert term not in text
@@ -66,16 +73,14 @@ def test_expense_confirmation_has_human_summary():
         category="food",
         payer_name="Антон",
         participants_str="Антон, Маша",
-        per_person_line="\nДоля каждого: 600.00 TRY",
+        per_person_line="\nДоля: по 600.00 TRY",
     )
 
-    assert "Поездка: <b>Турция</b>" in text
-    assert "Понял расход" in text
-    assert "Категория: еда" in text
-    assert "Описание: ужин" in text
+    assert "Проверь расход" in text
+    assert "ужин — <b>1 200.00 TRY</b>" in text
     assert "Оплатил: Антон" in text
     assert "Делим на: Антон, Маша" in text
-    assert "Доля каждого" in text
+    assert "Доля: по 600.00 TRY" in text
     assert "Per person" not in text
 
 
@@ -108,14 +113,22 @@ def test_expense_success_text_shows_amount_conversion_and_balance_command():
 
     text = _build_success_text(pending, expense)
 
-    assert "Расход добавлен" in text
-    assert "Категория: еда" in text
-    assert "Описание: ужин" in text
+    assert "Добавил расход" in text
+    assert "ужин — <b>1\xa0200.00 TRY ≈ 3\xa0600.00 RUB</b>" in text
     assert "1\xa0200.00 TRY ≈ 3\xa0600.00 RUB" in text
     assert "Оплатил: Антон" in text
     assert "Участники: Антон, Маша" in text
-    assert "• Маша: 1\xa0800.00 RUB" in text
+    assert "Доля: по 1\xa0800.00 RUB" in text
     assert "/balance" in text
+
+
+def test_parse_error_contains_required_examples():
+    from app.bot.handlers.expenses import USAGE_HINT
+
+    assert "Трейв, 500 рублей такси" in USAGE_HINT
+    assert "Трейв, 1200 TRY ужин на всех" in USAGE_HINT
+    assert "Трейв, 30 евро музей с Антоном и Машей" in USAGE_HINT
+    assert "Трейв, я оплатил 3000 рублей за отель" in USAGE_HINT
 
 
 def test_format_dual_does_not_duplicate_same_currency():

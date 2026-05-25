@@ -19,8 +19,7 @@ def _format_my_trips_message(trips: list) -> str:
     if not trips:
         return (
             "У вас пока нет поездок.\n"
-            "Обычно поездку создают в групповом чате: "
-            "<code>/newtrip Название поездки</code>."
+            "Создайте поездку в групповом чате: <code>/newtrip</code>."
         )
     lines = [f"• <b>{t.title}</b> ({t.default_currency}) — id {t.id}" for t in trips]
     lines.append("")
@@ -32,7 +31,7 @@ def _format_my_trips_message(trips: list) -> str:
 async def cmd_new_trip_private(message: Message):
     title = (message.text or "").partition(" ")[2].strip()
     if not title:
-        await message.answer("Укажите название: <code>/newtrip Грузия 2025</code>")
+        await message.answer("Укажите название, например: <code>/newtrip Турция 2026</code>")
         return
     async with session_scope() as session:
         user = await UserService(session).get_or_create(
@@ -73,8 +72,8 @@ async def cmd_members_private(message: Message):
         trips = await trip_svc.list_user_trips(user.id)
         if not trips:
             await message.answer(
-                "У вас пока нет поездок. В группе создайте поездку командой "
-                "<code>/newtrip Название поездки</code>."
+                "У вас пока нет поездок.\n"
+                "Создайте поездку в групповом чате: <code>/newtrip</code>."
             )
             return
         trip = trips[0]
@@ -111,15 +110,14 @@ async def cmd_balance_private(message: Message):
         user = await UserService(session).get_by_telegram_id(message.from_user.id)
         if not user:
             await message.answer(
-                "Сначала создайте поездку в группе: "
-                "<code>/newtrip Название поездки</code>."
+                "Сначала создайте поездку в группе: <code>/newtrip</code>."
             )
             return
         trips = await TripService(session).list_user_trips(user.id)
         if not trips:
             await message.answer(
-                "У вас пока нет поездок. В группе создайте поездку командой "
-                "<code>/newtrip Название поездки</code>."
+                "У вас пока нет поездок.\n"
+                "Создайте поездку в групповом чате: <code>/newtrip</code>."
             )
             return
         trip = trips[0]
@@ -132,10 +130,9 @@ async def cmd_balance_private(message: Message):
     head = f"<b>{trip.title}</b> · база {cur}\n"
     if not balances:
         await message.answer(
-            head
-            + "Расходов пока нет.\n"
-            + "Добавьте первый расход в группе, например: "
-            + "<code>Трейв, 500 рублей такси</code>."
+            "Расходов пока нет.\n\n"
+            "Добавьте первый расход в группе:\n"
+            "<code>Трейв, 500 рублей такси</code>"
         )
         return
 
