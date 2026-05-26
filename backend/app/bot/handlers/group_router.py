@@ -20,6 +20,47 @@ logger = logging.getLogger(__name__)
 router = Router(name="group_router")
 router.message.filter(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}))
 
+MAX_TRIP_TITLE_LENGTH = 200
+NEW_TRIP_PROMPT = (
+    "Как назовём поездку?\n\n"
+    "Например:\n"
+    "Армения\n"
+    "Турция май 2026\n"
+    "Ереван с друзьями\n\n"
+    "Чтобы отменить: /cancel"
+)
+NEW_TRIP_CANCELLED_TEXT = "Ок, создание поездки отменено."
+NEW_TRIP_EMPTY_TITLE_TEXT = "Название не должно быть пустым. Напишите название поездки или /cancel."
+NEW_TRIP_LONG_TITLE_TEXT = f"Название слишком длинное. Максимум {MAX_TRIP_TITLE_LENGTH} символов."
+
+_pending_new_trip_titles: dict[tuple[int, int], bool] = {}
+
+
+def _pending_new_trip_key(message: Message) -> tuple[int, int] | None:
+    if not message.from_user:
+        return None
+    return (message.chat.id, message.from_user.id)
+
+
+def _validate_new_trip_title(raw_title: str) -> tuple[str | None, str | None]:
+    title = (raw_title or "").strip()
+    if not title:
+        return None, NEW_TRIP_EMPTY_TITLE_TEXT
+    if len(title) > MAX_TRIP_TITLE_LENGTH:
+        return None, NEW_TRIP_LONG_TITLE_TEXT
+    return title, None
+
+
+def _group_trip_created_text(title: str) -> str:
+    return (
+        f"Поездка <b>{title}</b> создана.\n\n"
+        "Теперь:\n"
+        "1. Каждый участник нажимает /join\n"
+        "2. Добавляйте расходы в чат, например:\n"
+        "<code>Трейв, 500 рублей такси</code>\n\n"
+        "Посмотреть: /balance, /members, /app"
+    )
+
 
 def _format_group_trips_message(active_trip, chat_trips: list) -> str:
     lines: list[str] = []
@@ -137,10 +178,19 @@ router.message.middleware(GroupMessageSaver())
 
 @router.message(Command("newtrip"))
 async def group_new_trip(message: Message):
-    title = (message.text or "").partition(" ")[2].strip()
-    if not title:
-        await message.answer("Использование: <code>/newtrip Название</code>")
+    provided = (message.text or "").partition(" ")[2]
+    key = _pending_new_trip_key(message)
+    if not provided.strip():
+        if key:
+            _pending_new_trip_titles[key] = True
+        await message.answer(NEW_TRIP_PROMPT)
         return
+
+    title, error_text = _validate_new_trip_title(provided)
+    if error_text:
+        await message.answer(error_text)
+        return
+
     async with session_scope() as session:
         user = await UserService(session).get_or_create(
             telegram_user_id=message.from_user.id,
@@ -149,16 +199,22 @@ async def group_new_trip(message: Message):
             last_name=message.from_user.last_name,
         )
         trip = await TripService(session).create_trip(
-            title=title, owner=user, telegram_chat_id=message.chat.id
+            title=title,
+            owner=user,
+            telegram_chat_id=message.chat.id,
         )
-    await message.answer(
-        f"Поездка <b>{trip.title}</b> создана.\n\n"
-        "Теперь:\n"
-        "1. Каждый участник нажимает /join\n"
-        "2. Добавляйте расходы в чат, например:\n"
-        "<code>Трейв, 500 рублей такси</code>\n\n"
-        "Посмотреть: /balance, /members, /app"
-    )
+    if key:
+        _pending_new_trip_titles.pop(key, None)
+    await message.answer(_group_trip_created_text(trip.title))
+
+
+@router.message(Command("cancel"))
+async def group_cancel_new_trip(message: Message):
+    key = _pending_new_trip_key(message)
+    if not key or not _pending_new_trip_titles.pop(key, None):
+        await message.answer("Сейчас нет создания поездки, которое нужно отменить.")
+        return
+    await message.answer(NEW_TRIP_CANCELLED_TEXT)
 
 
 @router.message(Command("trips"))
@@ -282,6 +338,38 @@ async def group_balance(message: Message):
     else:
         t_lines = "Все рассчитались."
     await message.answer(f"<b>{trip.title}</b> · база {cur}\n\n{bal_lines}\n\n{t_lines}")
+
+
+@router.message(F.text)
+async def group_new_trip_title_input(message: Message):
+    key = _pending_new_trip_key(message)
+    if not key or not _pending_new_trip_titles.get(key):
+        return
+
+    text = (message.text or "").strip()
+    if not text or text.startswith("/"):
+        return
+
+    title, error_text = _validate_new_trip_title(text)
+    if error_text:
+        await message.answer(error_text)
+        return
+
+    async with session_scope() as session:
+        user = await UserService(session).get_or_create(
+            telegram_user_id=message.from_user.id,
+            username=message.from_user.username,
+            first_name=message.from_user.first_name,
+            last_name=message.from_user.last_name,
+        )
+        trip = await TripService(session).create_trip(
+            title=title,
+            owner=user,
+            telegram_chat_id=message.chat.id,
+        )
+
+    _pending_new_trip_titles.pop(key, None)
+    await message.answer(_group_trip_created_text(trip.title))
 
 
 @router.message(GroupAddressedFilter(), F.text)

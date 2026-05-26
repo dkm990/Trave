@@ -16,11 +16,12 @@ class _DummyScope:
 
 
 class _DummyMessage:
-    def __init__(self, chat_type: str, bot=None):
-        self.chat = SimpleNamespace(type=chat_type)
+    def __init__(self, chat_type: str, text: str = "", chat_id: int = 1, user_id: int = 1, bot=None):
+        self.chat = SimpleNamespace(type=chat_type, id=chat_id)
         self.from_user = SimpleNamespace(
-            id=1, username="tester", first_name="Test", last_name="User"
+            id=user_id, username="tester", first_name="Test", last_name="User"
         )
+        self.text = text
         self.bot = bot or SimpleNamespace(
             get_me=lambda: None
         )
@@ -298,3 +299,182 @@ def test_format_dual_does_not_duplicate_same_currency():
     from app.services.formatting import format_dual
 
     assert format_dual(Decimal("500"), "TRY", Decimal("500"), "TRY") == "500.00 TRY"
+
+
+@pytest.mark.asyncio
+async def test_group_newtrip_without_title_asks_for_title():
+    from app.bot.handlers import group_router
+
+    group_router._pending_new_trip_titles.clear()
+    msg = _DummyMessage("group", text="/newtrip", chat_id=101, user_id=501)
+
+    await group_router.group_new_trip(msg)
+
+    assert msg.answers == [(group_router.NEW_TRIP_PROMPT, None)]
+    assert group_router._pending_new_trip_titles.get((101, 501)) is True
+
+
+@pytest.mark.asyncio
+async def test_group_pending_title_same_user_creates_trip(monkeypatch):
+    from app.bot.handlers import group_router
+
+    created: list[tuple[str, int]] = []
+
+    class _UserService:
+        def __init__(self, session):
+            self.session = session
+
+        async def get_or_create(self, **kwargs):
+            return SimpleNamespace(id=77)
+
+    class _TripService:
+        def __init__(self, session):
+            self.session = session
+
+        async def create_trip(self, *, title: str, owner, telegram_chat_id=None):
+            created.append((title, telegram_chat_id))
+            return SimpleNamespace(id=9, title=title)
+
+    monkeypatch.setattr(group_router, "session_scope", lambda: _DummyScope())
+    monkeypatch.setattr(group_router, "UserService", _UserService)
+    monkeypatch.setattr(group_router, "TripService", _TripService)
+    group_router._pending_new_trip_titles.clear()
+
+    await group_router.group_new_trip(_DummyMessage("group", text="/newtrip", chat_id=101, user_id=501))
+    title_msg = _DummyMessage("group", text="Армения", chat_id=101, user_id=501)
+    await group_router.group_new_trip_title_input(title_msg)
+
+    assert created == [("Армения", 101)]
+    assert (101, 501) not in group_router._pending_new_trip_titles
+    assert "Поездка <b>Армения</b> создана." in title_msg.answers[0][0]
+
+
+@pytest.mark.asyncio
+async def test_group_pending_title_other_user_does_not_create_trip(monkeypatch):
+    from app.bot.handlers import group_router
+
+    created: list[tuple[str, int]] = []
+
+    class _UserService:
+        def __init__(self, session):
+            self.session = session
+
+        async def get_or_create(self, **kwargs):
+            return SimpleNamespace(id=77)
+
+    class _TripService:
+        def __init__(self, session):
+            self.session = session
+
+        async def create_trip(self, *, title: str, owner, telegram_chat_id=None):
+            created.append((title, telegram_chat_id))
+            return SimpleNamespace(id=9, title=title)
+
+    monkeypatch.setattr(group_router, "session_scope", lambda: _DummyScope())
+    monkeypatch.setattr(group_router, "UserService", _UserService)
+    monkeypatch.setattr(group_router, "TripService", _TripService)
+    group_router._pending_new_trip_titles.clear()
+
+    await group_router.group_new_trip(_DummyMessage("group", text="/newtrip", chat_id=101, user_id=501))
+    other_msg = _DummyMessage("group", text="Турция", chat_id=101, user_id=777)
+    await group_router.group_new_trip_title_input(other_msg)
+
+    assert created == []
+    assert other_msg.answers == []
+    assert group_router._pending_new_trip_titles.get((101, 501)) is True
+
+
+@pytest.mark.asyncio
+async def test_group_cancel_clears_pending_newtrip():
+    from app.bot.handlers import group_router
+
+    group_router._pending_new_trip_titles.clear()
+    await group_router.group_new_trip(_DummyMessage("group", text="/newtrip", chat_id=101, user_id=501))
+
+    cancel_msg = _DummyMessage("group", text="/cancel", chat_id=101, user_id=501)
+    await group_router.group_cancel_new_trip(cancel_msg)
+
+    assert cancel_msg.answers == [(group_router.NEW_TRIP_CANCELLED_TEXT, None)]
+    assert (101, 501) not in group_router._pending_new_trip_titles
+
+
+@pytest.mark.asyncio
+async def test_group_newtrip_with_title_creates_immediately(monkeypatch):
+    from app.bot.handlers import group_router
+
+    created: list[tuple[str, int]] = []
+
+    class _UserService:
+        def __init__(self, session):
+            self.session = session
+
+        async def get_or_create(self, **kwargs):
+            return SimpleNamespace(id=77)
+
+    class _TripService:
+        def __init__(self, session):
+            self.session = session
+
+        async def create_trip(self, *, title: str, owner, telegram_chat_id=None):
+            created.append((title, telegram_chat_id))
+            return SimpleNamespace(id=10, title=title)
+
+    monkeypatch.setattr(group_router, "session_scope", lambda: _DummyScope())
+    monkeypatch.setattr(group_router, "UserService", _UserService)
+    monkeypatch.setattr(group_router, "TripService", _TripService)
+    group_router._pending_new_trip_titles.clear()
+
+    msg = _DummyMessage("group", text="/newtrip Армения", chat_id=102, user_id=502)
+    await group_router.group_new_trip(msg)
+
+    assert created == [("Армения", 102)]
+    assert (102, 502) not in group_router._pending_new_trip_titles
+    assert "Поездка <b>Армения</b> создана." in msg.answers[0][0]
+
+
+@pytest.mark.asyncio
+async def test_private_newtrip_without_title_asks_for_title():
+    from app.bot.handlers import private_router
+
+    private_router._pending_new_trip_titles.clear()
+    msg = _DummyMessage("private", text="/newtrip", chat_id=201, user_id=601)
+
+    await private_router.cmd_new_trip_private(msg)
+
+    assert msg.answers == [(private_router.NEW_TRIP_PROMPT, None)]
+    assert private_router._pending_new_trip_titles.get((201, 601)) is True
+
+
+@pytest.mark.asyncio
+async def test_commands_during_pending_are_not_treated_as_trip_title(monkeypatch):
+    from app.bot.handlers import group_router
+
+    created: list[tuple[str, int]] = []
+
+    class _UserService:
+        def __init__(self, session):
+            self.session = session
+
+        async def get_or_create(self, **kwargs):
+            return SimpleNamespace(id=77)
+
+    class _TripService:
+        def __init__(self, session):
+            self.session = session
+
+        async def create_trip(self, *, title: str, owner, telegram_chat_id=None):
+            created.append((title, telegram_chat_id))
+            return SimpleNamespace(id=10, title=title)
+
+    monkeypatch.setattr(group_router, "session_scope", lambda: _DummyScope())
+    monkeypatch.setattr(group_router, "UserService", _UserService)
+    monkeypatch.setattr(group_router, "TripService", _TripService)
+    group_router._pending_new_trip_titles.clear()
+
+    await group_router.group_new_trip(_DummyMessage("group", text="/newtrip", chat_id=103, user_id=503))
+    command_msg = _DummyMessage("group", text="/members", chat_id=103, user_id=503)
+    await group_router.group_new_trip_title_input(command_msg)
+
+    assert created == []
+    assert command_msg.answers == []
+    assert group_router._pending_new_trip_titles.get((103, 503)) is True
