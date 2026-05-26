@@ -254,6 +254,17 @@ def _looks_like_expense_text(text: str) -> bool:
     return False
 
 
+def _looks_like_weather_text(text: str) -> bool:
+    lower = (text or "").lower()
+    return bool(
+        re.search(
+            r"(погода|дождь|осадки|ветер|температур|градус|жара|холодно|weather|rain|wind|temperature)",
+            lower,
+            re.IGNORECASE,
+        )
+    )
+
+
 def _log_travel_intent_flag_once(enabled: bool) -> None:
     global _travel_intent_flag_logged
     if _travel_intent_flag_logged:
@@ -411,6 +422,17 @@ async def handle_intent_text(
                 use_reply=use_reply,
                 intent=parser_intent,
             )
+
+    weather_like = _looks_like_weather_text(cleaned)
+    if not weather_like:
+        logger.info(
+            "travel_intent direct_chat chat=%s user=%s source=%s",
+            message.chat.id,
+            message.from_user.id if message.from_user else None,
+            source,
+        )
+        await _chat_response(message, cleaned, send)
+        return True
 
     active_trip_title: str | None = None
     try:

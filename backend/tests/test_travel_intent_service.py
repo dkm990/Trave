@@ -558,53 +558,108 @@ async def test_flag_false_does_not_call_travel_intent_extractor(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_flag_true_calls_travel_intent_extractor(monkeypatch):
+async def test_weather_message_calls_travel_intent_extractor(monkeypatch):
     called = {"value": False}
 
     class _CalledExtractor:
         async def extract(self, *args, **kwargs):
             called["value"] = True
-            return TravelIntentResult(intent="casual_chat", confidence=0.8)
+            return TravelIntentResult(
+                intent="weather",
+                confidence=0.8,
+                weather=TravelWeatherIntent(location="Istanbul", period_type="today"),
+            )
 
     fake_provider = _FakeProvider(Intent(action="unknown", confidence=0.0, payload={}, raw_text="x"))
 
-    async def _fake_chat_response(message, text, send):
-        await send("chat")
+    async def _fake_weather(city, **kwargs):
+        return "weather"
 
     monkeypatch.setattr(intent_router, "get_settings", lambda: _settings(enabled=True))
     monkeypatch.setattr(intent_router, "get_travel_intent_service", lambda: _CalledExtractor())
     monkeypatch.setattr(intent_router, "get_ai_provider", lambda: fake_provider)
+    monkeypatch.setattr(intent_router, "get_weather", _fake_weather)
     monkeypatch.setattr(intent_router, "session_scope", lambda: _DummyScope())
     monkeypatch.setattr(intent_router, "_resolve_active_trip", lambda session, message: asyncio.sleep(0, result=None))
-    monkeypatch.setattr(intent_router, "_chat_response", _fake_chat_response)
 
-    msg = _DummyMessage("hello", chat_type="group")
+    msg = _DummyMessage("weather in istanbul", chat_type="group")
     ok = await intent_router.handle_intent_text(msg, msg.text, source="trigger", use_reply=True)
     assert ok is True
     assert called["value"] is True
 
 
 @pytest.mark.asyncio
-async def test_invalid_extractor_result_safe_fallback(monkeypatch):
-    class _UnknownExtractor:
+async def test_casual_message_uses_direct_chat_without_extractor(monkeypatch):
+    called = {"extractor": False, "chat": False}
+
+    class _ShouldNotBeCalled:
         async def extract(self, *args, **kwargs):
+            called["extractor"] = True
             return TravelIntentResult.unknown()
 
     fake_provider = _FakeProvider(Intent(action="unknown", confidence=0.0, payload={}, raw_text="x"))
 
     async def _fake_chat_response(message, text, send):
+        called["chat"] = True
         await send("chat")
 
     monkeypatch.setattr(intent_router, "get_settings", lambda: _settings(enabled=True))
-    monkeypatch.setattr(intent_router, "get_travel_intent_service", lambda: _UnknownExtractor())
+    monkeypatch.setattr(intent_router, "get_travel_intent_service", lambda: _ShouldNotBeCalled())
     monkeypatch.setattr(intent_router, "get_ai_provider", lambda: fake_provider)
-    monkeypatch.setattr(intent_router, "session_scope", lambda: _DummyScope())
-    monkeypatch.setattr(intent_router, "_resolve_active_trip", lambda session, message: asyncio.sleep(0, result=None))
     monkeypatch.setattr(intent_router, "_chat_response", _fake_chat_response)
 
-    msg = _DummyMessage("hello", chat_type="group")
+    msg = _DummyMessage("чем заняться в Турции?", chat_type="group")
     ok = await intent_router.handle_intent_text(msg, msg.text, source="trigger", use_reply=True)
     assert ok is True
+    assert called == {"extractor": False, "chat": True}
+
+
+@pytest.mark.asyncio
+async def test_esim_question_uses_direct_chat_without_extractor(monkeypatch):
+    called = {"extractor": False, "chat": False}
+
+    class _ShouldNotBeCalled:
+        async def extract(self, *args, **kwargs):
+            called["extractor"] = True
+            return TravelIntentResult.unknown()
+
+    async def _fake_chat_response(message, text, send):
+        called["chat"] = True
+        await send("chat")
+
+    monkeypatch.setattr(intent_router, "get_settings", lambda: _settings(enabled=True))
+    monkeypatch.setattr(intent_router, "get_travel_intent_service", lambda: _ShouldNotBeCalled())
+    monkeypatch.setattr(intent_router, "get_ai_provider", lambda: _FakeProvider(Intent(action="unknown")))
+    monkeypatch.setattr(intent_router, "_chat_response", _fake_chat_response)
+
+    msg = _DummyMessage("какие eSIM взять в Турции?", chat_type="group")
+    ok = await intent_router.handle_intent_text(msg, msg.text, source="trigger", use_reply=True)
+    assert ok is True
+    assert called == {"extractor": False, "chat": True}
+
+
+@pytest.mark.asyncio
+async def test_private_casual_text_uses_direct_chat_without_extractor(monkeypatch):
+    called = {"extractor": False, "chat": False}
+
+    class _ShouldNotBeCalled:
+        async def extract(self, *args, **kwargs):
+            called["extractor"] = True
+            return TravelIntentResult.unknown()
+
+    async def _fake_chat_response(message, text, send):
+        called["chat"] = True
+        await send("chat")
+
+    monkeypatch.setattr(intent_router, "get_settings", lambda: _settings(enabled=True))
+    monkeypatch.setattr(intent_router, "get_travel_intent_service", lambda: _ShouldNotBeCalled())
+    monkeypatch.setattr(intent_router, "get_ai_provider", lambda: _FakeProvider(Intent(action="unknown")))
+    monkeypatch.setattr(intent_router, "_chat_response", _fake_chat_response)
+
+    msg = _DummyMessage("привет, чем занят?", chat_type="private")
+    ok = await intent_router.handle_intent_text(msg, msg.text, source="private", use_reply=False)
+    assert ok is True
+    assert called == {"extractor": False, "chat": True}
 
 
 def test_travel_intent_extractor_default_flag_is_false():
