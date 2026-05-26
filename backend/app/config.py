@@ -76,6 +76,7 @@ class Settings(BaseSettings):
     # retries count (0 = single attempt)
     travel_intent_retry_count: int = 0
     travel_intent_provider_order: str = "mimo,gemini"
+    conversational_provider_order: str = "mimo,gemini"
 
     # MiMo (OpenAI-compatible)
     mimo_api_key: str = ""
@@ -86,6 +87,7 @@ class Settings(BaseSettings):
     mimo_auth_header: str = "api-key"
     mimo_extraction_mode: str = "tool_call"
     mimo_max_completion_tokens: int = 512
+    mimo_chat_max_completion_tokens: int = 256
     mimo_temperature: float = 0.3
     mimo_top_p: float = 0.95
     mimo_benchmark_models: str = "mimo-v2.5-pro,mimo-v2-flash"

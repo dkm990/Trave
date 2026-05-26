@@ -127,6 +127,28 @@ class MimoProvider:
                 return await self._post_chat_completions(fallback_payload)
             raise
 
+    async def generate_text(self, *, system_instruction: str, prompt: str) -> str:
+        if not self.api_key:
+            raise MimoProviderError("MIMO_API_KEY is empty")
+        if not self.base_url:
+            raise MimoProviderError("MIMO_BASE_URL is empty")
+        if not self.model:
+            raise MimoProviderError("MIMO_MODEL is empty")
+
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": prompt},
+            ],
+            "max_completion_tokens": self.max_completion_tokens,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "stream": False,
+            "thinking": {"type": "disabled"},
+        }
+        return await self._post_chat_completions(payload)
+
     def _build_payload(self, *, system_instruction: str, prompt: str, mode: str) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.model,

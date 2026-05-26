@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING
@@ -21,6 +22,7 @@ from typing import TYPE_CHECKING
 from aiogram.types import Message
 
 from app.ai import get_ai_provider
+from app.ai.mimo_provider import MimoProvider
 from app.ai.base import Intent
 from app.ai.rule_based import RuleBasedProvider
 from app.bot.session import session_scope
@@ -44,6 +46,17 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 _travel_intent_flag_logged = False
+
+CHAT_SYSTEM_PROMPT = """Ты travel assistant в Telegram.
+Отвечай коротко, практично, по-русски.
+Не используй markdown-заголовки, жирный текст, таблицы и raw markdown.
+Для travel advice давай максимум 5-7 коротких пунктов.
+Для обычной болтовни отвечай естественно и кратко.
+Не называй конкретные цены, тарифы, расписания, наличие и актуальные условия, если их нет во входных данных.
+Если вопрос зависит от актуальности, скажи проверить условия перед покупкой или поездкой.
+"""
+
+CHAT_SAFE_FALLBACK = "Сейчас не могу нормально ответить, попробуй ещё раз чуть позже."
 
 _MONTHS_RU_TO_NUM: dict[str, int] = {
     "января": 1,
@@ -511,7 +524,6 @@ async def _handle_weather_extraction(extracted: TravelIntentResult, send) -> Non
 
 async def _chat_response(message: Message, text: str, send) -> None:
     """Conversational AI ответ с памятью группы."""
-    from app.ai import get_ai_provider
     from app.services.group_memory_service import GroupMemoryService
 
     # Собираем контекст: память группы + информация о поездке
@@ -530,10 +542,117 @@ async def _chat_response(message: Message, text: str, send) -> None:
 
     context = "\n\n".join(context_parts) if context_parts else ""
 
-    response = await get_ai_provider().generate_chat_response(
-        text, context=context, trip_info=trip_info
+    response = await _generate_conversational_response(
+        text,
+        context=context,
+        trip_info=trip_info,
     )
     await send(response)
+
+
+def _sanitize_chat_response(text: str, *, limit: int = 1500) -> str:
+    cleaned = (text or "").strip()
+    cleaned = re.sub(r"```(?:\w+)?", "", cleaned)
+    cleaned = cleaned.replace("```", "")
+    cleaned = cleaned.replace("**", "")
+    cleaned = cleaned.replace("__", "")
+    cleaned = re.sub(r"(?m)^\s*#{1,6}\s*", "", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    if len(cleaned) > limit:
+        cleaned = cleaned[: limit - 1].rstrip() + "…"
+    return cleaned or CHAT_SAFE_FALLBACK
+
+
+def _chat_provider_order(settings) -> list[str]:
+    raw = (getattr(settings, "conversational_provider_order", "") or "").strip()
+    order: list[str] = []
+    for item in raw.split(","):
+        name = item.strip().lower()
+        if name in {"mimo", "gemini"} and name not in order:
+            order.append(name)
+    if not order:
+        order = ["mimo", "gemini"]
+    return order
+
+
+def _build_chat_prompt(text: str, *, context: str = "", trip_info: str = "") -> str:
+    parts = []
+    if context:
+        parts.append(f"Контекст чата:\n{context}")
+    if trip_info:
+        parts.append(f"Информация о поездке:\n{trip_info}")
+    parts.append(f"Сообщение пользователя:\n{text}")
+    return "\n\n".join(parts)
+
+
+async def _generate_mimo_chat_response(text: str, *, context: str = "", trip_info: str = "") -> str:
+    settings = get_settings()
+    if not settings.mimo_api_key:
+        raise RuntimeError("mimo chat provider is not configured")
+    provider = MimoProvider(
+        api_key=settings.mimo_api_key,
+        base_url=settings.mimo_base_url,
+        model=settings.mimo_model,
+        timeout_seconds=settings.mimo_timeout_seconds,
+        retry_count=settings.mimo_retry_count,
+        auth_header=settings.mimo_auth_header,
+        extraction_mode=settings.mimo_extraction_mode,
+        max_completion_tokens=settings.mimo_chat_max_completion_tokens,
+        temperature=settings.mimo_temperature,
+        top_p=settings.mimo_top_p,
+    )
+    return await provider.generate_text(
+        system_instruction=CHAT_SYSTEM_PROMPT,
+        prompt=_build_chat_prompt(text, context=context, trip_info=trip_info),
+    )
+
+
+async def _generate_gemini_chat_response(text: str, *, context: str = "", trip_info: str = "") -> str:
+    return await get_ai_provider().generate_chat_response(
+        text,
+        context=context,
+        trip_info=trip_info,
+    )
+
+
+async def _generate_conversational_response(text: str, *, context: str = "", trip_info: str = "") -> str:
+    settings = get_settings()
+    last_error: Exception | None = None
+    for provider_name in _chat_provider_order(settings):
+        started = time.monotonic()
+        try:
+            if provider_name == "mimo":
+                if not settings.mimo_api_key:
+                    continue
+                raw = await _generate_mimo_chat_response(text, context=context, trip_info=trip_info)
+            elif provider_name == "gemini":
+                if not settings.gemini_api_key:
+                    continue
+                raw = await _generate_gemini_chat_response(text, context=context, trip_info=trip_info)
+            else:
+                continue
+            response = _sanitize_chat_response(raw)
+            latency_ms = int((time.monotonic() - started) * 1000)
+            logger.info(
+                "Conversational provider=%s status=ok latency_ms=%s",
+                provider_name,
+                latency_ms,
+            )
+            if "задумался" in response.lower() or "gemini недоступен" in response.lower():
+                raise RuntimeError("chat provider returned degraded fallback")
+            return response
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            latency_ms = int((time.monotonic() - started) * 1000)
+            logger.warning(
+                "Conversational provider=%s status=error type=%s msg=%s latency_ms=%s",
+                provider_name,
+                type(exc).__name__,
+                str(exc)[:200],
+                latency_ms,
+            )
+    logger.warning("Conversational fallback to safe message: %s", last_error)
+    return CHAT_SAFE_FALLBACK
 
 
 async def _resolve_active_trip(session, message: Message) -> "Trip | None":

@@ -65,7 +65,21 @@ class _FakeExtractor:
 
 
 def _settings(*, enabled: bool):
-    return SimpleNamespace(enable_travel_intent_extractor=enabled)
+    return SimpleNamespace(
+        enable_travel_intent_extractor=enabled,
+        conversational_provider_order="mimo,gemini",
+        mimo_api_key="mimo-key",
+        mimo_base_url="https://token-plan-sgp.xiaomimimo.com/v1",
+        mimo_model="mimo-v2.5-pro",
+        mimo_timeout_seconds=5,
+        mimo_retry_count=0,
+        mimo_auth_header="api-key",
+        mimo_extraction_mode="tool_call",
+        mimo_max_completion_tokens=512,
+        mimo_temperature=0.3,
+        mimo_top_p=0.95,
+        gemini_api_key="gemini-key",
+    )
 
 
 def _weather_payload(*, location: str, surface: str | None, period: str, date_text: str | None = None, days: int | None = None):
@@ -616,3 +630,121 @@ async def test_private_text_without_pending_routes_to_intent_handler(monkeypatch
 
     await private_router.private_natural_text(msg)
     assert calls == [("weather in moscow tomorrow", "private")]
+
+
+def test_chat_response_sanitizer_removes_raw_markdown():
+    text = intent_router._sanitize_chat_response("### План\n**Первое**\n\n\n__Второе__")
+    assert "###" not in text
+    assert "**" not in text
+    assert "__" not in text
+    assert "План" in text
+
+
+@pytest.mark.asyncio
+async def test_travel_advice_uses_mimo_chat_first(monkeypatch):
+    calls: list[str] = []
+
+    async def _mimo(text, *, context="", trip_info=""):
+        calls.append("mimo")
+        return "**Проверь район**, возьми наличные."
+
+    async def _gemini(text, *, context="", trip_info=""):
+        calls.append("gemini")
+        return "gemini"
+
+    monkeypatch.setattr(intent_router, "get_settings", lambda: _settings(enabled=True))
+    monkeypatch.setattr(intent_router, "_generate_mimo_chat_response", _mimo)
+    monkeypatch.setattr(intent_router, "_generate_gemini_chat_response", _gemini)
+
+    out = await intent_router._generate_conversational_response("чем заняться в Турции?")
+    assert calls == ["mimo"]
+    assert "**" not in out
+    assert "Проверь район" in out
+
+
+@pytest.mark.asyncio
+async def test_casual_chat_uses_mimo_first(monkeypatch):
+    calls: list[str] = []
+
+    async def _mimo(text, *, context="", trip_info=""):
+        calls.append("mimo")
+        return "Я на связи."
+
+    monkeypatch.setattr(intent_router, "get_settings", lambda: _settings(enabled=True))
+    monkeypatch.setattr(intent_router, "_generate_mimo_chat_response", _mimo)
+
+    out = await intent_router._generate_conversational_response("привет")
+    assert calls == ["mimo"]
+    assert out == "Я на связи."
+
+
+@pytest.mark.asyncio
+async def test_mimo_chat_failure_falls_back_to_gemini(monkeypatch):
+    calls: list[str] = []
+
+    async def _mimo(text, *, context="", trip_info=""):
+        calls.append("mimo")
+        raise RuntimeError("timeout")
+
+    async def _gemini(text, *, context="", trip_info=""):
+        calls.append("gemini")
+        return "Ответ Gemini"
+
+    monkeypatch.setattr(intent_router, "get_settings", lambda: _settings(enabled=True))
+    monkeypatch.setattr(intent_router, "_generate_mimo_chat_response", _mimo)
+    monkeypatch.setattr(intent_router, "_generate_gemini_chat_response", _gemini)
+
+    out = await intent_router._generate_conversational_response("какие eSIM взять?")
+    assert calls == ["mimo", "gemini"]
+    assert out == "Ответ Gemini"
+
+
+@pytest.mark.asyncio
+async def test_gemini_429_after_mimo_failure_returns_safe_fallback(monkeypatch):
+    async def _mimo(text, *, context="", trip_info=""):
+        raise RuntimeError("timeout")
+
+    async def _gemini(text, *, context="", trip_info=""):
+        raise RuntimeError("429 RESOURCE_EXHAUSTED")
+
+    monkeypatch.setattr(intent_router, "get_settings", lambda: _settings(enabled=True))
+    monkeypatch.setattr(intent_router, "_generate_mimo_chat_response", _mimo)
+    monkeypatch.setattr(intent_router, "_generate_gemini_chat_response", _gemini)
+
+    out = await intent_router._generate_conversational_response("какие eSIM взять?")
+    assert out == intent_router.CHAT_SAFE_FALLBACK
+
+
+@pytest.mark.asyncio
+async def test_weather_path_does_not_call_chat_provider(monkeypatch):
+    weather_calls: list[str] = []
+    chat_called = {"value": False}
+
+    async def _fake_weather(city, **kwargs):
+        weather_calls.append(city)
+        return "weather"
+
+    async def _chat(*args, **kwargs):
+        chat_called["value"] = True
+        return "chat"
+
+    fake_provider = _FakeProvider(Intent(action="unknown", confidence=0.0, payload={}, raw_text="x"))
+    extracted = TravelIntentResult(
+        intent="weather",
+        confidence=0.9,
+        weather=TravelWeatherIntent(location="Istanbul", period_type="today"),
+    )
+
+    monkeypatch.setattr(intent_router, "get_settings", lambda: _settings(enabled=True))
+    monkeypatch.setattr(intent_router, "get_weather", _fake_weather)
+    monkeypatch.setattr(intent_router, "get_ai_provider", lambda: fake_provider)
+    monkeypatch.setattr(intent_router, "session_scope", lambda: _DummyScope())
+    monkeypatch.setattr(intent_router, "_resolve_active_trip", lambda session, message: asyncio.sleep(0, result=None))
+    monkeypatch.setattr(intent_router, "get_travel_intent_service", lambda: _FakeExtractor(extracted))
+    monkeypatch.setattr(intent_router, "_generate_conversational_response", _chat)
+
+    msg = _DummyMessage("weather in istanbul", chat_type="group")
+    ok = await intent_router.handle_intent_text(msg, msg.text, source="trigger", use_reply=True)
+    assert ok is True
+    assert weather_calls == ["Istanbul"]
+    assert chat_called["value"] is False
