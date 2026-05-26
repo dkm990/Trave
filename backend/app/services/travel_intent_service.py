@@ -4,56 +4,40 @@ import asyncio
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
 from typing import Any
 
+from app.ai.mimo_provider import MimoProvider
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 ALLOWED_INTENTS = {"weather", "expense", "travel_advice", "casual_chat", "unknown"}
 ALLOWED_PERIOD_TYPES = {"today", "tomorrow", "exact_date", "days", "week", "weekend", None}
+MIN_CONFIDENCE = 0.45
 
-SYSTEM_INSTRUCTION = """Ты extractor intent для Telegram travel bot.
-Твоя задача: извлечь intent и параметры из текста. НИКОГДА не выдумывай факты.
-Верни строго один JSON без markdown и без пояснений.
+SYSTEM_INSTRUCTION = """Ты — классификатор сообщений Telegram travel bot.
+Верни только вызов функции extract_travel_intent или строгий JSON той же схемы.
+Не отвечай пользователю.
+Не выдумывай погоду, цены или факты.
+Слово "Трейв" — это имя бота, игнорируй его при классификации.
+Для погоды извлекай только location/period.
+Для расходов извлекай amount/currency/description, но backend всё равно валидирует.
+Если непонятно — intent=unknown, confidence низкий.
+Язык сообщений: русский, возможен транслит/английские города.
+Если сообщение спрашивает "погода", "дождь", "температура", "ветер" или "что там по погоде" — это intent=weather.
+Если есть город/место и дата/период рядом с погодным вопросом, обязательно извлеки их.
 
-Схема:
-{
-  "intent": "weather|expense|travel_advice|casual_chat|unknown",
-  "confidence": 0.0,
-  "weather": {
-    "location": "string|null",
-    "location_surface": "string|null",
-    "period_type": "today|tomorrow|exact_date|days|week|weekend|null",
-    "date_text": "string|null",
-    "days": 0
-  },
-  "expense": {
-    "amount": 0,
-    "currency": "string|null",
-    "description": "string|null",
-    "participants_text": "string|null"
-  }
-}
-
-Правила:
-- Погода: извлеки только параметры запроса. Не генерируй прогноз.
-- Если запрос о погоде и есть предлог в локации, сохрани natural form в location_surface:
-  "в Стамбуле", "на Бали", "в Москве".
-- location: каноничный запрос для API (без предлога, без хвостов периода), если можно.
-- period_type:
-  - "сегодня" -> today
-  - "завтра" -> tomorrow
-  - "на 4 июня" -> exact_date и date_text="4 июня"
-  - "на 4 дня" -> days и days=4
-  - "на неделю" -> week и days=7
-  - "на выходные" -> weekend
-- Если не хватает данных (например, нет location), intent всё равно weather, но confidence ниже.
-- Расходы: извлекай только простые поля expense.
-- Если не уверен, ставь intent=unknown и понижай confidence.
+Примеры:
+"трейв погода стамбул 4 июня" -> weather, location="Стамбул", period_type="exact_date", date_text="4 июня"
+"трейв что там по погоде в Стамбуле на выходных" -> weather, location="Стамбул", location_surface="в Стамбуле", period_type="weekend"
+"трейв в москве завтра дождь?" -> weather, location="Москва", location_surface="в москве", period_type="tomorrow", asks_rain=true
+"трейв 400 лир такси" -> expense, amount=400, currency="TRY", description="такси"
+"трейв чем заняться в Турции?" -> travel_advice
+"трейв привет, чем занят?" -> casual_chat
 """
 
 
@@ -64,6 +48,7 @@ class TravelWeatherIntent:
     period_type: str | None = None
     date_text: str | None = None
     days: int | None = None
+    asks_rain: bool | None = None
 
 
 @dataclass
@@ -80,42 +65,85 @@ class TravelIntentResult:
     confidence: float = 0.0
     weather: TravelWeatherIntent | None = None
     expense: TravelExpenseIntent | None = None
+    provider: str | None = None
 
     @classmethod
     def unknown(cls) -> "TravelIntentResult":
-        return cls(intent="unknown", confidence=0.0, weather=TravelWeatherIntent(), expense=TravelExpenseIntent())
+        return cls(
+            intent="unknown",
+            confidence=0.0,
+            weather=TravelWeatherIntent(),
+            expense=TravelExpenseIntent(),
+            provider=None,
+        )
 
 
 class TravelIntentService:
-    """LLM-only extraction layer for travel intents.
-
-    This service never produces weather facts and never writes data.
-    """
+    """LLM-only extraction layer for travel intents."""
 
     def __init__(self) -> None:
         self.settings = get_settings()
-        self._client: Any | None = None
-        self._client_init_failed = False
+        self._gemini_client: Any | None = None
+        self._gemini_client_init_failed = False
+        self._mimo_provider: MimoProvider | None = None
 
-    def _init_client(self) -> Any | None:
-        if self._client is not None or self._client_init_failed:
-            return self._client
+    def _init_gemini_client(self) -> Any | None:
+        if self._gemini_client is not None or self._gemini_client_init_failed:
+            return self._gemini_client
         try:
             from google import genai  # type: ignore
         except ImportError:
-            self._client_init_failed = True
+            self._gemini_client_init_failed = True
             logger.warning("google-genai SDK not installed for TravelIntentService")
             return None
         if not self.settings.gemini_api_key:
-            self._client_init_failed = True
+            self._gemini_client_init_failed = True
             return None
         try:
-            self._client = genai.Client(api_key=self.settings.gemini_api_key)
+            self._gemini_client = genai.Client(api_key=self.settings.gemini_api_key)
         except Exception as exc:  # noqa: BLE001
-            self._client_init_failed = True
+            self._gemini_client_init_failed = True
             logger.warning("TravelIntentService Gemini init failed: %s", exc)
             return None
-        return self._client
+        return self._gemini_client
+
+    def _init_mimo_provider(self) -> MimoProvider | None:
+        if self._mimo_provider is not None:
+            return self._mimo_provider
+        if not self.settings.mimo_api_key:
+            return None
+        self._mimo_provider = MimoProvider(
+            api_key=self.settings.mimo_api_key,
+            base_url=self.settings.mimo_base_url,
+            model=self.settings.mimo_model,
+            timeout_seconds=self.settings.mimo_timeout_seconds,
+            retry_count=self.settings.mimo_retry_count,
+            auth_header=self.settings.mimo_auth_header,
+            extraction_mode=self.settings.mimo_extraction_mode,
+            max_completion_tokens=self.settings.mimo_max_completion_tokens,
+            temperature=self.settings.mimo_temperature,
+            top_p=self.settings.mimo_top_p,
+        )
+        return self._mimo_provider
+
+    def _provider_order(self) -> list[str]:
+        raw = (self.settings.travel_intent_provider_order or "").strip()
+        order: list[str] = []
+        if raw:
+            for item in raw.split(","):
+                name = item.strip().lower()
+                if name in {"mimo", "gemini"} and name not in order:
+                    order.append(name)
+        if not order:
+            order = ["mimo", "gemini"]
+
+        filtered: list[str] = []
+        for provider in order:
+            if provider == "mimo" and self.settings.mimo_api_key:
+                filtered.append(provider)
+            elif provider == "gemini" and self.settings.gemini_api_key:
+                filtered.append(provider)
+        return filtered
 
     async def extract(
         self,
@@ -129,45 +157,92 @@ class TravelIntentService:
         if not text:
             return TravelIntentResult.unknown()
 
-        client = self._init_client()
-        if client is None:
-            return TravelIntentResult.unknown()
-
         prompt = self._build_prompt(
             raw_text=text,
             chat_context=chat_context,
             current_dt=current_dt,
             active_trip_title=active_trip_title,
         )
-        attempts = max(1, self.settings.travel_intent_retry_count + 1)
+        provider_order = self._provider_order()
+        if not provider_order:
+            logger.warning("TravelIntentService: no configured providers for extraction")
+            return TravelIntentResult.unknown()
+
+        best_result: TravelIntentResult | None = None
         last_exc: Exception | None = None
-        for attempt in range(attempts):
+
+        for provider_name in provider_order:
+            started = time.monotonic()
             try:
-                raw_json = await asyncio.wait_for(
-                    self._call_gemini(client, prompt),
-                    timeout=self.settings.travel_intent_timeout_seconds,
-                )
+                raw_json = await self._extract_raw_json(provider_name, prompt)
                 parsed = self._parse_response(raw_json)
-                if parsed is not None:
+                if parsed is None:
+                    raise ValueError("invalid extractor JSON")
+                parsed.provider = provider_name
+                latency_ms = int((time.monotonic() - started) * 1000)
+                logger.info(
+                    "TravelIntentService provider=%s status=ok intent=%s confidence=%.2f latency_ms=%s",
+                    provider_name,
+                    parsed.intent,
+                    parsed.confidence,
+                    latency_ms,
+                )
+                best_result = parsed
+                if parsed.intent != "unknown" and parsed.confidence >= MIN_CONFIDENCE:
                     return parsed
-                last_exc = ValueError("invalid extractor JSON")
-            except asyncio.TimeoutError as exc:
-                last_exc = exc
-                logger.warning("TravelIntentService timeout attempt=%s", attempt + 1)
+                logger.info(
+                    "TravelIntentService provider=%s low-confidence/unknown fallback intent=%s confidence=%.2f",
+                    provider_name,
+                    parsed.intent,
+                    parsed.confidence,
+                )
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
+                latency_ms = int((time.monotonic() - started) * 1000)
                 logger.warning(
-                    "TravelIntentService error attempt=%s type=%s msg=%s",
-                    attempt + 1,
+                    "TravelIntentService provider=%s status=error type=%s msg=%s latency_ms=%s",
+                    provider_name,
                     type(exc).__name__,
-                    str(exc)[:200],
+                    str(exc)[:220],
+                    latency_ms,
                 )
-                msg = str(exc).lower()
-                if any(marker in msg for marker in ("429", "503", "resource_exhausted", "unavailable")):
-                    break
 
+        if best_result is not None:
+            return best_result
         logger.warning("TravelIntentService fallback to unknown: %s", last_exc)
         return TravelIntentResult.unknown()
+
+    async def _extract_raw_json(self, provider_name: str, prompt: str) -> str:
+        if provider_name == "mimo":
+            provider = self._init_mimo_provider()
+            if provider is None:
+                raise RuntimeError("mimo provider is not configured")
+            return await provider.generate_json(
+                system_instruction=SYSTEM_INSTRUCTION,
+                prompt=prompt,
+            )
+        if provider_name == "gemini":
+            client = self._init_gemini_client()
+            if client is None:
+                raise RuntimeError("gemini provider is not configured")
+            attempts = max(1, self.settings.travel_intent_retry_count + 1)
+            last_exc: Exception | None = None
+            for attempt in range(attempts):
+                try:
+                    return await asyncio.wait_for(
+                        self._call_gemini(client, prompt),
+                        timeout=self.settings.travel_intent_timeout_seconds,
+                    )
+                except asyncio.TimeoutError as exc:
+                    last_exc = exc
+                    logger.warning("TravelIntentService Gemini timeout attempt=%s", attempt + 1)
+                except Exception as exc:  # noqa: BLE001
+                    last_exc = exc
+                    msg = str(exc).lower()
+                    if any(marker in msg for marker in ("429", "503", "resource_exhausted", "unavailable")):
+                        break
+            raise last_exc or RuntimeError("gemini extraction failed")
+        raise RuntimeError(f"unknown provider: {provider_name}")
 
     async def _call_gemini(self, client: Any, prompt: str) -> str:
         from google.genai import types  # type: ignore
@@ -234,8 +309,10 @@ class TravelIntentService:
             confidence = 0.0
         confidence = max(0.0, min(1.0, confidence))
 
-        weather = self._parse_weather(payload.get("weather"))
-        expense = self._parse_expense(payload.get("expense"))
+        weather_payload = payload.get("weather") if isinstance(payload.get("weather"), dict) else payload
+        expense_payload = payload.get("expense") if isinstance(payload.get("expense"), dict) else payload
+        weather = self._parse_weather(weather_payload)
+        expense = self._parse_expense(expense_payload)
         return TravelIntentResult(
             intent=intent,
             confidence=confidence,
@@ -267,15 +344,15 @@ class TravelIntentService:
         if days is not None and (days <= 0 or days > 16):
             days = None
 
-        location = self._norm_text(payload.get("location"))
-        location_surface = self._norm_text(payload.get("location_surface"))
-        date_text = self._norm_text(payload.get("date_text"))
+        asks_rain_raw = payload.get("asks_rain")
+        asks_rain = asks_rain_raw if isinstance(asks_rain_raw, bool) else None
         return TravelWeatherIntent(
-            location=location,
-            location_surface=location_surface,
+            location=self._norm_text(payload.get("location")),
+            location_surface=self._norm_text(payload.get("location_surface")),
             period_type=period_type,
-            date_text=date_text,
+            date_text=self._norm_text(payload.get("date_text")),
             days=days,
+            asks_rain=asks_rain,
         )
 
     def _parse_expense(self, payload: Any) -> TravelExpenseIntent:

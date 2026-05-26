@@ -75,6 +75,20 @@ class Settings(BaseSettings):
     travel_intent_timeout_seconds: int = 5
     # retries count (0 = single attempt)
     travel_intent_retry_count: int = 0
+    travel_intent_provider_order: str = "mimo,gemini"
+
+    # MiMo (OpenAI-compatible)
+    mimo_api_key: str = ""
+    mimo_base_url: str = "https://token-plan-sgp.xiaomimimo.com/v1"
+    mimo_model: str = "mimo-v2.5-pro"
+    mimo_timeout_seconds: int = 5
+    mimo_retry_count: int = 0
+    mimo_auth_header: str = "api-key"
+    mimo_extraction_mode: str = "tool_call"
+    mimo_max_completion_tokens: int = 512
+    mimo_temperature: float = 0.3
+    mimo_top_p: float = 0.95
+    mimo_benchmark_models: str = "mimo-v2.5-pro,mimo-v2-flash"
 
     # CORS
     cors_origins: str = "*"
