@@ -71,6 +71,10 @@ class Settings(BaseSettings):
     gemini_timeout_seconds: int = 8
     gemini_retry_count: int = 1
     gemini_use_context_cache: bool = False
+    enable_travel_intent_extractor: bool = False
+    travel_intent_timeout_seconds: int = 5
+    # retries count (0 = single attempt)
+    travel_intent_retry_count: int = 0
 
     # CORS
     cors_origins: str = "*"

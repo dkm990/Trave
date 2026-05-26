@@ -236,3 +236,14 @@ async def private_new_trip_title_input(message: Message):
 
     _pending_new_trip_titles.pop(key, None)
     await message.answer(_private_trip_created_text(trip.id, trip.title))
+
+
+@router.message(F.text)
+async def private_natural_text(message: Message):
+    raw_text = (message.text or "").strip()
+    if not raw_text or raw_text.startswith("/"):
+        return
+
+    from app.bot.intent_router import handle_intent_text
+
+    await handle_intent_text(message, raw_text, source="private", use_reply=False)

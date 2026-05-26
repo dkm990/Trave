@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING
 
@@ -22,12 +22,19 @@ from aiogram.types import Message
 
 from app.ai import get_ai_provider
 from app.ai.base import Intent
+from app.ai.rule_based import RuleBasedProvider
 from app.bot.session import session_scope
+from app.config import get_settings
 from app.services.balance_service import BalanceService, simplify_debts
 from app.services.currency_service import CurrencyError, CurrencyService
 from app.services.document_service import DocumentService
 from app.services.expense_service import ExpenseService
 from app.services.formatting import format_dual, format_money
+from app.services.travel_intent_service import (
+    TravelIntentResult,
+    TravelWeatherIntent,
+    get_travel_intent_service,
+)
 from app.services.trip_service import TripService
 from app.services.user_service import UserService
 from app.services.weather_service import get_weather
@@ -36,6 +43,7 @@ if TYPE_CHECKING:
     from app.models.trip import Trip
 
 logger = logging.getLogger(__name__)
+_travel_intent_flag_logged = False
 
 _MONTHS_RU_TO_NUM: dict[str, int] = {
     "января": 1,
@@ -199,26 +207,87 @@ def _extract_weather_target_date(text: str) -> tuple[date | None, bool]:
     return target, False
 
 
-async def handle_intent_text(
-    message: Message,
-    text: str,
+def _parse_date_text(date_text: str | None) -> date | None:
+    if not date_text:
+        return None
+    target, _today_requested = _extract_weather_target_date(f"на {date_text}")
+    return target
+
+
+def _looks_like_expense_text(text: str) -> bool:
+    lower = text.lower()
+    if re.search(r"\d", lower) and re.search(
+        r"\b(rub|руб|рубл|usd|eur|try|gel|thb|vnd|лир|лиры|доллар|евро|лари|бат|донг)\b",
+        lower,
+    ):
+        return True
+    if any(marker in lower for marker in ("оплатил", "заплатил", "потратил", "такси", "ужин", "отель")) and re.search(r"\d", lower):
+        return True
+    return False
+
+
+def _log_travel_intent_flag_once(enabled: bool) -> None:
+    global _travel_intent_flag_logged
+    if _travel_intent_flag_logged:
+        return
+    logger.info("Travel intent extractor enabled=%s", enabled)
+    _travel_intent_flag_logged = True
+
+
+async def _dispatch_intent(
     *,
+    message: Message,
+    cleaned: str,
     source: str,
-    use_reply: bool = False,
+    use_reply: bool,
+    intent: Intent,
 ) -> bool:
-    """Распознать intent и выполнить соответствующее действие.
+    send = message.reply if use_reply else message.answer
 
-    Returns True если intent обработан (включая unknown/chat),
-    False — если text пустой/None.
+    if intent.action == "add_expense":
+        from app.bot.handlers.expenses import propose_expense_from_intent
 
-    `source`: 'add' | 'ai' | 'expense' | 'mention' | 'reply' | 'trigger' | 'private'.
-    """
-    if not text or not text.strip():
-        return False
+        await propose_expense_from_intent(
+            message, intent, source=source, use_reply=use_reply
+        )
+        return True
 
-    cleaned = text.strip()
+    if intent.action in ("chat", "unknown"):
+        await _chat_response(message, cleaned, send)
+        return True
 
-    # ── Fast-path: regex pre-check for weather queries ──
+    if intent.action == "show_balance":
+        await _show_balance(message, send)
+        return True
+
+    if intent.action == "show_today_spending":
+        await _show_today_spending(message, send)
+        return True
+
+    if intent.action == "convert_currency":
+        await _convert_currency(intent, send)
+        return True
+
+    if intent.action == "find_document":
+        await _find_document(message, intent, send)
+        return True
+
+    if intent.action == "get_weather":
+        await _handle_get_weather(intent, send)
+        return True
+
+    await _chat_response(message, cleaned, send)
+    return True
+
+
+async def _legacy_intent_flow(
+    *,
+    message: Message,
+    cleaned: str,
+    source: str,
+    use_reply: bool,
+) -> bool:
+    # Old behavior path when extractor feature is disabled.
     if _WEATHER_RE.search(cleaned):
         location_query, location_surface = _extract_weather_location(cleaned)
         if location_query:
@@ -248,7 +317,6 @@ async def handle_intent_text(
             return True
 
     intent = await get_ai_provider().parse_intent(cleaned)
-
     logger.info(
         "intent_router chat=%s user=%s source=%s text_len=%s "
         "provider=%s intent=%s confidence=%.2f needs_confirmation=%s",
@@ -261,43 +329,123 @@ async def handle_intent_text(
         intent.confidence,
         intent.needs_confirmation,
     )
+    return await _dispatch_intent(
+        message=message,
+        cleaned=cleaned,
+        source=source,
+        use_reply=use_reply,
+        intent=intent,
+    )
 
-    if intent.action == "add_expense":
-        from app.bot.handlers.expenses import propose_expense_from_intent
 
-        await propose_expense_from_intent(
-            message, intent, source=source, use_reply=use_reply
+async def handle_intent_text(
+    message: Message,
+    text: str,
+    *,
+    source: str,
+    use_reply: bool = False,
+) -> bool:
+    """Распознать intent и выполнить соответствующее действие.
+
+    Returns True если intent обработан (включая unknown/chat),
+    False — если text пустой/None.
+
+    `source`: 'add' | 'ai' | 'expense' | 'mention' | 'reply' | 'trigger' | 'private'.
+    """
+    if not text or not text.strip():
+        return False
+
+    cleaned = text.strip()
+    settings = get_settings()
+    extractor_enabled = bool(settings.enable_travel_intent_extractor)
+    _log_travel_intent_flag_once(extractor_enabled)
+
+    if not extractor_enabled:
+        return await _legacy_intent_flow(
+            message=message,
+            cleaned=cleaned,
+            source=source,
+            use_reply=use_reply,
         )
-        return True
 
     send = message.reply if use_reply else message.answer
 
-    # ── Chat / unknown → conversational AI с памятью группы ──
-    if intent.action in ("chat", "unknown"):
+    # Expense parser remains primary regardless of extractor flag.
+    force_parser_sources = {"add", "ai", "expense"}
+    parser_first = source in force_parser_sources or _looks_like_expense_text(cleaned)
+    if parser_first:
+        parser_intent = await RuleBasedProvider().parse_intent(cleaned)
+        if parser_intent.action == "add_expense":
+            return await _dispatch_intent(
+                message=message,
+                cleaned=cleaned,
+                source=source,
+                use_reply=use_reply,
+                intent=parser_intent,
+            )
+
+    active_trip_title: str | None = None
+    try:
+        async with session_scope() as session:
+            active_trip = await _resolve_active_trip(session, message)
+            active_trip_title = active_trip.title if active_trip else None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to resolve trip context for travel intent: %s", exc)
+
+    extracted = await get_travel_intent_service().extract(
+        cleaned,
+        chat_context=str(message.chat.type),
+        current_dt=datetime.now(),
+        active_trip_title=active_trip_title,
+    )
+    logger.info(
+        "travel_intent chat=%s user=%s source=%s intent=%s confidence=%.2f weather_location=%s period=%s days=%s",
+        message.chat.id,
+        message.from_user.id if message.from_user else None,
+        source,
+        extracted.intent,
+        extracted.confidence,
+        extracted.weather.location if extracted.weather else None,
+        extracted.weather.period_type if extracted.weather else None,
+        extracted.weather.days if extracted.weather else None,
+    )
+
+    if extracted.intent == "weather" and extracted.confidence >= 0.45:
+        await _handle_weather_extraction(extracted, send)
+        return True
+
+    if extracted.intent == "expense" and extracted.confidence >= 0.45 and not parser_first:
+        expense_intent = await RuleBasedProvider().parse_intent(cleaned)
+        if expense_intent.action == "add_expense":
+            return await _dispatch_intent(
+                message=message,
+                cleaned=cleaned,
+                source=source,
+                use_reply=use_reply,
+                intent=expense_intent,
+            )
+
+    if extracted.intent in {"travel_advice", "casual_chat"} and extracted.confidence >= 0.45:
         await _chat_response(message, cleaned, send)
         return True
 
-    if intent.action == "show_balance":
-        await _show_balance(message, send)
-        return True
+    # Safe and fast fallback when extractor is uncertain/unavailable.
+    fallback_intent = await RuleBasedProvider().parse_intent(cleaned)
+    if fallback_intent.action != "unknown":
+        logger.info(
+            "travel_intent fallback(rule_based) chat=%s source=%s action=%s",
+            message.chat.id,
+            source,
+            fallback_intent.action,
+        )
+        return await _dispatch_intent(
+            message=message,
+            cleaned=cleaned,
+            source=source,
+            use_reply=use_reply,
+            intent=fallback_intent,
+        )
 
-    if intent.action == "show_today_spending":
-        await _show_today_spending(message, send)
-        return True
-
-    if intent.action == "convert_currency":
-        await _convert_currency(intent, send)
-        return True
-
-    if intent.action == "find_document":
-        await _find_document(message, intent, send)
-        return True
-
-    if intent.action == "get_weather":
-        await _handle_get_weather(intent, send)
-        return True
-
-    # Unreachable — chat and unknown handled above
     await _chat_response(message, cleaned, send)
     return True
 
@@ -309,6 +457,40 @@ async def _handle_get_weather(intent: Intent, send) -> None:
         await send("Какой город? Напиши, например, «погода Москва» 🌍")
         return
     weather_text = await get_weather(city)
+    await send(weather_text)
+
+
+async def _handle_weather_extraction(extracted: TravelIntentResult, send) -> None:
+    weather: TravelWeatherIntent = extracted.weather or TravelWeatherIntent()
+    city = (weather.location or "").strip()
+    if not city:
+        await send("Уточни город, например: «погода в Стамбуле на выходные».")
+        return
+
+    period = weather.period_type
+    kwargs: dict[str, object] = {
+        "location_surface": weather.location_surface,
+    }
+
+    if period == "today":
+        kwargs["target_date"] = date.today()
+        kwargs["today_requested"] = True
+    elif period == "tomorrow":
+        kwargs["target_date"] = date.today() + timedelta(days=1)
+    elif period == "exact_date":
+        target = _parse_date_text(weather.date_text)
+        if not target:
+            await send("Уточни дату прогноза, например: «на 4 июня».")
+            return
+        kwargs["target_date"] = target
+    elif period == "days":
+        kwargs["days"] = weather.days or 2
+    elif period == "week":
+        kwargs["days"] = 7
+    elif period == "weekend":
+        kwargs["weekend_requested"] = True
+
+    weather_text = await get_weather(city, **kwargs)
     await send(weather_text)
 
 
