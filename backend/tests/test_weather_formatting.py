@@ -53,7 +53,7 @@ def test_extract_weather_location_surface_and_query():
     from app.bot.intent_router import _extract_weather_location
 
     q, s = _extract_weather_location("Трейв, погода в Стамбуле на 2 дня")
-    assert q == "Стамбул"
+    assert q == "Стамбуле"
     assert s == "в Стамбуле"
 
     q1, s1 = _extract_weather_location("Трейв, погода в Дубае завтра")
@@ -241,3 +241,81 @@ async def test_get_weather_retries_with_dubai_variant(monkeypatch):
     )
     assert attempts[:2] == ["Дубае", "Дубай"]
     assert text.startswith("Погода в Дубае на ")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source", "expected_candidate", "surface"),
+    [
+        ("Москве", "Москва", "в Москве"),
+        ("Праге", "Прага", "в Праге"),
+        ("Риге", "Рига", "в Риге"),
+        ("Барселоне", "Барселона", "в Барселоне"),
+        ("Париже", "Париж", "в Париже"),
+        ("Стамбуле", "Стамбул", "в Стамбуле"),
+    ],
+)
+async def test_get_weather_case_fallback_candidates(monkeypatch, source, expected_candidate, surface):
+    from app.services import weather_service
+
+    attempts: list[str] = []
+
+    async def _fake_geocode(city_name: str):
+        attempts.append(city_name)
+        if city_name == expected_candidate:
+            return {
+                "name": expected_candidate,
+                "country": "Тест",
+                "latitude": 0.0,
+                "longitude": 0.0,
+                "timezone": "UTC",
+            }
+        return None
+
+    async def _fake_fetch_forecast(*, latitude, longitude, timezone, forecast_days):
+        return _build_fake_forecast(date.today(), max(10, forecast_days))
+
+    monkeypatch.setattr(weather_service, "geocode", _fake_geocode)
+    monkeypatch.setattr(weather_service, "_fetch_forecast", _fake_fetch_forecast)
+
+    text = await weather_service.get_weather(
+        source,
+        target_date=date.today() + timedelta(days=1),
+        location_surface=surface,
+    )
+    assert source in attempts
+    assert expected_candidate in attempts
+    assert text.startswith(f"Погода {surface} на ")
+
+
+@pytest.mark.asyncio
+async def test_plain_moscow_query_still_works_without_fallback(monkeypatch):
+    from app.services import weather_service
+
+    attempts: list[str] = []
+
+    async def _fake_geocode(city_name: str):
+        attempts.append(city_name)
+        if city_name == "Москва":
+            return {
+                "name": "Москва",
+                "country": "Россия",
+                "latitude": 55.75,
+                "longitude": 37.62,
+                "timezone": "Europe/Moscow",
+            }
+        return None
+
+    async def _fake_fetch_forecast(*, latitude, longitude, timezone, forecast_days):
+        return _build_fake_forecast(date.today(), max(10, forecast_days))
+
+    monkeypatch.setattr(weather_service, "geocode", _fake_geocode)
+    monkeypatch.setattr(weather_service, "_fetch_forecast", _fake_fetch_forecast)
+
+    text = await weather_service.get_weather(
+        "Москва",
+        target_date=date.today() + timedelta(days=1),
+        location_surface=None,
+    )
+    assert attempts == ["Москва"]
+    assert text.startswith("Погода: Москва, Россия")

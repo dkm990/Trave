@@ -338,22 +338,38 @@ def _normalize_geocode_base_query(value: str) -> str:
     return text
 
 
-def _fallback_nominative_candidate(value: str) -> str | None:
-    """Fallback candidate from common Russian case endings."""
+def _fallback_nominative_candidates(value: str) -> list[str]:
+    """Fallback candidates from common Russian case endings."""
     token = (value or "").strip()
     if not token or " " in token or not re.search(r"[А-Яа-яЁё]", token):
-        return None
+        return []
     lower = token.lower()
     if len(token) < 4:
-        return None
+        return []
 
+    candidates: list[str] = []
+
+    # Дубае -> Дубай
     if lower.endswith("ае"):
-        return token[:-1] + "й"
-    if lower.endswith("е") and len(token) >= 2 and lower[-2] not in "аеёиоуыэюяьъ":
-        return token[:-1]
+        candidates.append(token[:-1] + "й")
+
+    # Париже -> Париж, Стамбуле -> Стамбул, Москве -> Москв
+    if lower.endswith("е"):
+        candidates.append(token[:-1])
+
+        # Москве -> Москва, Праге -> Прага, Риге -> Рига, Барселоне -> Барселона
+        candidates.append(token[:-1] + "а")
+
+    # Generic extra fallback
     if lower[-1] in "аоуыэюяиё" and len(token) >= 5:
-        return token[:-1]
-    return None
+        candidates.append(token[:-1])
+
+    deduped: list[str] = []
+    for candidate in candidates:
+        clean = candidate.strip()
+        if clean and clean != token and clean not in deduped:
+            deduped.append(clean)
+    return deduped
 
 
 def _build_geocode_candidates(value: str) -> list[str]:
@@ -363,9 +379,9 @@ def _build_geocode_candidates(value: str) -> list[str]:
     if base:
         candidates.append(base)
 
-    fallback = _fallback_nominative_candidate(base)
-    if fallback and fallback not in candidates:
-        candidates.append(fallback)
+    for fallback in _fallback_nominative_candidates(base):
+        if fallback not in candidates:
+            candidates.append(fallback)
     return candidates
 
 

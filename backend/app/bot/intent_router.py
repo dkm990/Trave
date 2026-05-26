@@ -82,28 +82,13 @@ def _strip_city_noise(city: str) -> str:
 
 
 def _canonicalize_weather_query(raw_location: str) -> str:
-    """Build safer geocoder query without hardcoded city dictionary."""
+    """Build safe geocoder query without case-conversion heuristics.
+
+    Case fallbacks are handled in weather_service via candidate retries.
+    """
     query = (raw_location or "").strip()
     query = re.sub(r"^[,.\s]+|[,.\s]+$", "", query)
     query = re.sub(r"\s+", " ", query)
-    if not query:
-        return ""
-
-    # Conservative nominative-like heuristic for one-word Russian locations:
-    # "Стамбуле" -> "Стамбул", "Париже" -> "Париж".
-    # Keep forms like "Дубае" unchanged here; fallback retries happen in weather service.
-    parts = query.split(" ")
-    if len(parts) == 1 and re.search(r"[А-Яа-яЁё]", parts[0]):
-        token = parts[0]
-        token_lower = token.lower()
-        if (
-            len(token) >= 5
-            and token_lower.endswith("е")
-            and len(token) >= 2
-            and token_lower[-2] not in "аеёиоуыэюяьъ"
-        ):
-            return token[:-1]
-
     return query
 
 
