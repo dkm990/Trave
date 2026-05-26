@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING
 
@@ -36,6 +37,21 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_MONTHS_RU_TO_NUM: dict[str, int] = {
+    "января": 1,
+    "февраля": 2,
+    "марта": 3,
+    "апреля": 4,
+    "мая": 5,
+    "июня": 6,
+    "июля": 7,
+    "августа": 8,
+    "сентября": 9,
+    "октября": 10,
+    "ноября": 11,
+    "декабря": 12,
+}
+
 # Regex for fast weather query detection (before AI parsing)
 # NOTE: no trailing \b because Cyrillic word boundaries work differently
 _WEATHER_RE = re.compile(
@@ -47,104 +63,155 @@ _WEATHER_RE = re.compile(
 # After the broad city capture regex extracts \"CityName + noise\", these
 # patterns strip trailing time/noise phrases. Applied iteratively because
 # compound phrases like \"на ближайшие 10 дней\" need multiple passes.
-_CITY_NOISE_PATTERNS: list[re.Pattern] = [
-    # Compound phrases (longest/most specific first)
-    re.compile(
-        r"\s+(?:на|за|в|к)\s+ближайш(?:ие|ий|ую|ее|его)\s+\d+\s*"
-        r"(?:дн(?:я|ей|и)|день)?\s*$",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\s+(?:на|за|в|к)\s+"
-        r"(?:\d+\s*(?:дн(?:я|ей|и)|день|недел[юьи]))\s*$",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\s+(?:на|за|в|к)\s+(?:выходны[ех]|выходные)\s*$",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\s+(?:на|за|в|к)\s+"
-        r"(?:ближайш(?:ие|ий|ую|ее|его)|сегодня|завтра)\s*$",
-        re.IGNORECASE,
-    ),
-    # Time words at end (without preposition)
-    re.compile(r"\s+(?:сегодня|завтра|недел[юи])\s*$", re.IGNORECASE),
-    # Generic \"на/за/в + anything\" at end
-    re.compile(r"\s+(?:на|за|в|к)\s+.+?\s*$", re.IGNORECASE),
-    # Trailing orphan preposition (leftover after earlier strip)
-    re.compile(r"\s+(?:на|за|в|к)\s*$", re.IGNORECASE),
-]
-
-# Russian prepositional → nominative case fixes for geocoding.
-# Order matters: specific patterns before general ones.
-_CASE_FIXES: list[tuple[re.Pattern, str]] = [
-    # -ии → -ия (России→Россия, Турции→Турция)
-    (re.compile(r"ии$"), "ия"),
-    # -ае → -ай (Дубае→Дубай)
-    (re.compile(r"ае$"), "ай"),
-    # -ве → -ва where stem ends in consonant (Москве→Москва)
-    (re.compile(r"([гжзклмнпрстфхцчшщбвд])ве$"), r"\1ва"),
-    # Foreign city: hard consonant + е → drop е (Париже→Париж, Берлине→Берлин)
-    (re.compile(r"([бгджзклмнпрстфхцчшщ])е$"), r"\1"),
-    # -ле/-ре/-не → drop е (Стамбуле→Стамбул, Барселоне→Барселон)
-    (re.compile(r"([лрн])е$"), r"\1"),
-]
-
-
 def _strip_city_noise(city: str) -> str:
-    """Iteratively strip trailing noise phrases from extracted city name."""
+    """Strip trailing time-window phrases from extracted location text."""
+    city = (city or "").strip().rstrip("?!,.")
+    patterns = [
+        r"\s+(?:на|за)\s*\d{1,2}\s*(?:дн(?:я|ей|и)?|day|days)\s*$",
+        r"\s+(?:на|за)\s+недел[юи]\s*$",
+        r"\s+(?:на|за)\s+выходн(?:ые|ых)\s*$",
+        r"\s+(?:на|за)\s*\d{1,2}\s+(?:января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)(?:\s+\d{4})?\s*$",
+        r"\s+(?:сегодня|завтра)\s*$",
+    ]
     prev = None
-    while prev != city:
+    while city and city != prev:
         prev = city
-        for pat in _CITY_NOISE_PATTERNS:
-            city = pat.sub("", city).strip().rstrip("?!,.")
+        for pat in patterns:
+            city = re.sub(pat, "", city, flags=re.IGNORECASE).strip().rstrip("?!,.")
     return city
 
 
-def _normalize_city_case(city: str) -> str:
-    """Normalize Russian prepositional case → nominative for geocoding."""
-    for pattern, replacement in _CASE_FIXES:
-        city = pattern.sub(replacement, city)
-    return city
+def _canonicalize_weather_query(raw_location: str) -> str:
+    """Build safer geocoder query without hardcoded city dictionary."""
+    query = (raw_location or "").strip()
+    query = re.sub(r"^[,.\s]+|[,.\s]+$", "", query)
+    query = re.sub(r"\s+", " ", query)
+    if not query:
+        return ""
+
+    # Conservative nominative-like heuristic for one-word Russian locations:
+    # "Стамбуле" -> "Стамбул", "Париже" -> "Париж".
+    # Keep forms like "Дубае" unchanged here; fallback retries happen in weather service.
+    parts = query.split(" ")
+    if len(parts) == 1 and re.search(r"[А-Яа-яЁё]", parts[0]):
+        token = parts[0]
+        token_lower = token.lower()
+        if (
+            len(token) >= 5
+            and token_lower.endswith("е")
+            and len(token) >= 2
+            and token_lower[-2] not in "аеёиоуыэюяьъ"
+        ):
+            return token[:-1]
+
+    return query
+
+
+def _extract_weather_location(text: str) -> tuple[str | None, str | None]:
+    """Extract (location_query, location_surface) from weather request text.
+
+    - location_query: neutral place string for API lookup
+    - location_surface: user-friendly phrase with preposition (e.g. "в Стамбуле", "на Бали")
+    """
+    raw = (text or "").strip()
+
+    preposition_pattern = re.compile(
+        r"(?:погод[аыуе]?|weather|сколько\s+градусов|температур[аы]|(?:какая\s+)?погода|(?:какой\s+)?дождь)\s+"
+        r"(в|во|на)\s+([A-ZА-ЯЁ][A-Za-zА-Яа-яЁё0-9\s\-]{1,60})",
+        re.IGNORECASE,
+    )
+    m = preposition_pattern.search(raw)
+    if m:
+        prep = m.group(1).lower()
+        loc_raw = _strip_city_noise(m.group(2))
+        if loc_raw:
+            surface = f"{prep} {loc_raw}"
+            query = _canonicalize_weather_query(loc_raw)
+            return (query or loc_raw), surface
+
+    no_prep_pattern = re.compile(
+        r"(?:погод[аыуе]?|weather|сколько\s+градусов|температур[аы]|(?:какая\s+)?погода|(?:какой\s+)?дождь)\s+"
+        r"([A-ZА-ЯЁ][A-Za-zА-Яа-яЁё0-9\s\-]{1,60})",
+        re.IGNORECASE,
+    )
+    m2 = no_prep_pattern.search(raw)
+    if m2:
+        loc_raw = _strip_city_noise(m2.group(1))
+        if loc_raw:
+            query = _canonicalize_weather_query(loc_raw)
+            return (query or loc_raw), None
+
+    return None, None
 
 
 def _extract_weather_city(text: str) -> str | None:
-    """Extract city name from a weather query.
+    """Backward-compatible wrapper for weather city extraction."""
+    query, _surface = _extract_weather_location(text)
+    return query
 
-    Uses a broad regex to capture the city + surrounding text,
-    then strips common noise phrases (\"на ближайшие 10 дней\", etc.)
-    and normalises Russian prepositional case → nominative.
-    """
-    # Broad city capture — includes digits so \"10 дней\" doesn't break matching
-    broad_city = re.compile(
-        r"(?:погод[аыуе]?\s+(?:в|на|во)\s+|weather\s+(?:in|at)\s+|"
-        r"сколько\s+градусов\s+(?:в|на|во)\s+|"
-        r"температур[аы]\s+(?:в|на|во)\s+|"
-        r"(?:какая\s+)?погода\s+(?:в|на|во)\s+|"
-        r"(?:какой\s+)?дождь\s+(?:в|на|во)\s+)"
-        r"([A-ZА-ЯЁ][A-Za-zА-Яа-яёЁ0-9\s\-]+?)(?:\?|$)",
-        re.IGNORECASE,
-    )
-    m = broad_city.search(text)
-    if m:
-        city = m.group(1).strip().rstrip("?!")
-        city = _strip_city_noise(city)
-        city = _normalize_city_case(city)
-        if city:
-            return city
 
-    # Fallback: look for \"погода CityName\" at end
-    fallback = re.search(
-        r"(?:погод[аыуе]?|weather)\s+"
-        r"([A-ZА-ЯЁ][A-Za-zА-Яа-яёЁ\s\-]{2,30})\s*$",
+def _extract_weather_days(text: str) -> int | None:
+    lower = text.lower()
+    if re.search(r"(?:на|за)\s+недел[юи]\b", lower):
+        return 7
+    if re.search(r"(?:на|за)\s+выходн(?:ые|ых)\b", lower):
+        return 2
+
+    m = re.search(
+        r"(?:на|за)\s*(\d{1,2})\s*(?:дн(?:я|ей|и)?|day|days)\b",
         text,
         re.IGNORECASE,
     )
-    if fallback:
-        return fallback.group(1).strip().rstrip("?!")
+    if not m:
+        return None
+    days = int(m.group(1))
+    if days <= 0:
+        return None
+    return days
 
-    return None
+
+def _is_weekend_request(text: str) -> bool:
+    return bool(re.search(r"(?:на|за)\s+выходн(?:ые|ых)\b", text.lower()))
+
+
+def _extract_weather_target_date(text: str) -> tuple[date | None, bool]:
+    lower = text.lower()
+    if "сегодня" in lower:
+        return date.today(), True
+    if "завтра" in lower:
+        return date.today() + timedelta(days=1), False
+
+    m = re.search(
+        r"(?:на|за)\s*(\d{1,2})\s+"
+        r"(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)"
+        r"(?:\s+(\d{4}))?",
+        lower,
+        re.IGNORECASE,
+    )
+    if not m:
+        return None, False
+
+    day_num = int(m.group(1))
+    month_name = m.group(2).lower()
+    month_num = _MONTHS_RU_TO_NUM.get(month_name)
+    if month_num is None:
+        return None, False
+
+    year_raw = m.group(3)
+    today = date.today()
+    year = int(year_raw) if year_raw else today.year
+    try:
+        target = date(year, month_num, day_num)
+    except ValueError:
+        return None, False
+
+    if year_raw is None and target < today:
+        try:
+            target = date(today.year + 1, month_num, day_num)
+        except ValueError:
+            return None, False
+
+    return target, False
 
 
 async def handle_intent_text(
@@ -168,13 +235,30 @@ async def handle_intent_text(
 
     # ── Fast-path: regex pre-check for weather queries ──
     if _WEATHER_RE.search(cleaned):
-        city = _extract_weather_city(cleaned)
-        if city:
+        location_query, location_surface = _extract_weather_location(cleaned)
+        if location_query:
+            requested_days = _extract_weather_days(cleaned)
+            target_date, today_requested = _extract_weather_target_date(cleaned)
+            weekend_requested = _is_weekend_request(cleaned)
+            if requested_days and requested_days > 1:
+                target_date = None
             logger.info(
-                "intent_router fast-path weather city=%s text=%s", city, cleaned[:80]
+                "intent_router fast-path weather location=%s days=%s target_date=%s weekend=%s text=%s",
+                location_query,
+                requested_days,
+                target_date.isoformat() if target_date else None,
+                weekend_requested,
+                cleaned[:80],
             )
             send = message.reply if use_reply else message.answer
-            weather_text = await get_weather(city)
+            weather_text = await get_weather(
+                location_query,
+                target_date=target_date,
+                days=requested_days,
+                today_requested=today_requested,
+                location_surface=location_surface,
+                weekend_requested=weekend_requested,
+            )
             await send(weather_text)
             return True
 
