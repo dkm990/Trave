@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from aiogram import F, Router
 from aiogram.enums import ChatType
-from aiogram.filters import Command
+from aiogram.filters import Command, Filter
 from aiogram.types import Message
 
 from app.bot.session import session_scope
@@ -34,6 +34,12 @@ def _pending_new_trip_key(message: Message) -> tuple[int, int] | None:
     if not message.from_user:
         return None
     return (message.chat.id, message.from_user.id)
+
+
+class PendingNewTripTitleFilter(Filter):
+    async def __call__(self, message: Message) -> bool:
+        key = _pending_new_trip_key(message)
+        return bool(key and _pending_new_trip_titles.get(key))
 
 
 def _validate_new_trip_title(raw_title: str) -> tuple[str | None, str | None]:
@@ -204,10 +210,10 @@ async def cmd_balance_private(message: Message):
     await message.answer(f"{head}\n{bal_lines}\n\n{t_lines}")
 
 
-@router.message(F.text)
+@router.message(PendingNewTripTitleFilter(), F.text)
 async def private_new_trip_title_input(message: Message):
     key = _pending_new_trip_key(message)
-    if not key or not _pending_new_trip_titles.get(key):
+    if not key:
         return
 
     text = (message.text or "").strip()

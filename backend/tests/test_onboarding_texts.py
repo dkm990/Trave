@@ -377,7 +377,8 @@ async def test_group_pending_title_other_user_does_not_create_trip(monkeypatch):
 
     await group_router.group_new_trip(_DummyMessage("group", text="/newtrip", chat_id=101, user_id=501))
     other_msg = _DummyMessage("group", text="Турция", chat_id=101, user_id=777)
-    await group_router.group_new_trip_title_input(other_msg)
+    if await group_router.PendingNewTripTitleFilter()(other_msg):
+        await group_router.group_new_trip_title_input(other_msg)
 
     assert created == []
     assert other_msg.answers == []
@@ -478,3 +479,125 @@ async def test_commands_during_pending_are_not_treated_as_trip_title(monkeypatch
     assert created == []
     assert command_msg.answers == []
     assert group_router._pending_new_trip_titles.get((103, 503)) is True
+
+
+@pytest.mark.asyncio
+async def test_group_pending_filter_matches_only_same_user_pending():
+    from app.bot.handlers import group_router
+
+    group_router._pending_new_trip_titles.clear()
+    flt = group_router.PendingNewTripTitleFilter()
+    same = _DummyMessage("group", text="Армения", chat_id=555, user_id=777)
+    other = _DummyMessage("group", text="Армения", chat_id=555, user_id=778)
+
+    assert await flt(same) is False
+    group_router._pending_new_trip_titles[(555, 777)] = True
+    assert await flt(same) is True
+    assert await flt(other) is False
+
+
+@pytest.mark.asyncio
+async def test_group_addressed_expense_without_pending_reaches_intent_router(monkeypatch):
+    from app.bot.handlers import group_router
+    from app.bot import intent_router
+
+    calls: list[tuple[str, str, bool]] = []
+
+    async def _fake_handle_intent_text(message, text, *, source, use_reply=False):
+        calls.append((text, source, use_reply))
+        return True
+
+    class _Bot:
+        id = 8841451417
+
+        async def me(self):
+            return SimpleNamespace(id=self.id, username="Trave0Bot")
+
+    monkeypatch.setattr(intent_router, "handle_intent_text", _fake_handle_intent_text)
+    group_router._pending_new_trip_titles.clear()
+
+    msg = _DummyMessage("group", text="Трейв, 400 лир такси", chat_id=600, user_id=700, bot=_Bot())
+    msg.reply_to_message = None
+
+    await group_router.group_natural_text(msg)
+
+    assert calls
+    assert "400 лир такси" in calls[0][0]
+    assert calls[0][2] is True
+
+
+@pytest.mark.asyncio
+async def test_group_addressed_weather_without_pending_reaches_intent_router(monkeypatch):
+    from app.bot.handlers import group_router
+    from app.bot import intent_router
+
+    calls: list[tuple[str, str, bool]] = []
+
+    async def _fake_handle_intent_text(message, text, *, source, use_reply=False):
+        calls.append((text, source, use_reply))
+        return True
+
+    class _Bot:
+        id = 8841451417
+
+        async def me(self):
+            return SimpleNamespace(id=self.id, username="Trave0Bot")
+
+    monkeypatch.setattr(intent_router, "handle_intent_text", _fake_handle_intent_text)
+    group_router._pending_new_trip_titles.clear()
+
+    msg = _DummyMessage(
+        "group",
+        text="Трейв, погода в Стамбуле на 2 дня",
+        chat_id=601,
+        user_id=701,
+        bot=_Bot(),
+    )
+    msg.reply_to_message = None
+
+    await group_router.group_natural_text(msg)
+
+    assert calls
+    assert "погода в Стамбуле на 2 дня" in calls[0][0]
+    assert calls[0][2] is True
+
+
+@pytest.mark.asyncio
+async def test_group_pending_other_user_still_reaches_natural_text(monkeypatch):
+    from app.bot.handlers import group_router
+    from app.bot import intent_router
+
+    calls: list[tuple[str, str, bool]] = []
+
+    async def _fake_handle_intent_text(message, text, *, source, use_reply=False):
+        calls.append((text, source, use_reply))
+        return True
+
+    class _Bot:
+        id = 8841451417
+
+        async def me(self):
+            return SimpleNamespace(id=self.id, username="Trave0Bot")
+
+    monkeypatch.setattr(intent_router, "handle_intent_text", _fake_handle_intent_text)
+    group_router._pending_new_trip_titles.clear()
+    group_router._pending_new_trip_titles[(777, 111)] = True
+
+    msg = _DummyMessage("group", text="Трейв, 500 рублей такси", chat_id=777, user_id=222, bot=_Bot())
+    msg.reply_to_message = None
+
+    assert await group_router.PendingNewTripTitleFilter()(msg) is False
+    await group_router.group_natural_text(msg)
+
+    assert calls
+    assert "500 рублей такси" in calls[0][0]
+
+
+@pytest.mark.asyncio
+async def test_private_pending_filter_does_not_match_without_state():
+    from app.bot.handlers import private_router
+
+    private_router._pending_new_trip_titles.clear()
+    flt = private_router.PendingNewTripTitleFilter()
+    msg = _DummyMessage("private", text="просто текст", chat_id=900, user_id=901)
+    assert await flt(msg) is False
