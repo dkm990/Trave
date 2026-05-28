@@ -1021,7 +1021,9 @@ async def test_chat_response_search_enabled_calls_service_and_passes_context(mon
     await intent_router._chat_response(msg, msg.text, msg.reply)
     assert "Airalo Turkey plans" in captured["web_search_context"]
     assert "https://example.com/airalo" in captured["web_search_context"]
-    assert msg.replies == ["ok"]
+    assert msg.replies
+    assert msg.replies[0].startswith("ok")
+    assert "Источники: example.com" in msg.replies[0]
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,7 @@ import re
 import time
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from urllib.parse import urlparse
 from typing import TYPE_CHECKING
 
 from aiogram.types import Message
@@ -604,6 +605,7 @@ async def _chat_response(message: Message, text: str, send) -> None:
 
     context = "\n\n".join(context_parts) if context_parts else ""
     web_search_context = ""
+    web_results: list[WebSearchResult] = []
     web_search_unavailable = False
     settings = get_settings()
 
@@ -621,6 +623,8 @@ async def _chat_response(message: Message, text: str, send) -> None:
         web_search_context=web_search_context,
         web_search_unavailable=web_search_unavailable,
     )
+    if web_results:
+        response = _append_sources_to_response(response, web_results)
     await send(response)
 
 
@@ -680,6 +684,28 @@ def _format_web_search_context(results: list[WebSearchResult]) -> str:
             snippet = snippet[:279].rstrip() + "…"
         rows.append(f"{idx}. {item.title}\nURL: {item.url}\nФрагмент: {snippet}")
     return "\n\n".join(rows)
+
+
+def _append_sources_to_response(response: str, results: list[WebSearchResult]) -> str:
+    sources: list[str] = []
+    seen: set[str] = set()
+    for item in results[:5]:
+        candidate = (item.source or "").strip()
+        if not candidate:
+            host = urlparse(item.url).netloc.lower().strip()
+            candidate = host.removeprefix("www.")
+        if not candidate:
+            continue
+        key = candidate.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        sources.append(candidate)
+    if not sources:
+        return response
+    if "Источники:" in response:
+        return response
+    return f"{response}\n\nИсточники: {', '.join(sources)}"
 
 
 def _build_chat_prompt(
