@@ -170,8 +170,10 @@ def test_group_help_is_short_and_actionable():
     assert "/balance" in GROUP_HELP_TEXT
     assert "/members" in GROUP_HELP_TEXT
     assert "/app" in GROUP_HELP_TEXT
-    assert "Трейв, 500 рублей такси" in GROUP_HELP_TEXT
-    assert "Трейв, 1200 TRY ужин на всех" in GROUP_HELP_TEXT
+    assert "/newtrip" in GROUP_HELP_TEXT
+    assert "500 рублей такси" in GROUP_HELP_TEXT
+    assert "1200 TRY ужин на всех" in GROUP_HELP_TEXT
+    assert "я оплатил кофе 500" in GROUP_HELP_TEXT
     assert "/setdisplaycurrency" not in GROUP_HELP_TEXT
     assert "/rename" not in GROUP_HELP_TEXT
 
@@ -180,12 +182,12 @@ def test_private_help_explains_full_flow():
     from app.bot.handlers.basic import PRIVATE_HELP_TEXT
 
     assert "Добавь меня в групповой чат" in PRIVATE_HELP_TEXT
-    assert "Пиши расходы обычным текстом" in PRIVATE_HELP_TEXT
+    assert "Пиши расходы или вопросы обычным сообщением" in PRIVATE_HELP_TEXT
     assert "<b>Команды:</b>" in PRIVATE_HELP_TEXT
     assert "/newtrip" in PRIVATE_HELP_TEXT
     assert "/join" in PRIVATE_HELP_TEXT
-    assert "/app — история и аналитика" in PRIVATE_HELP_TEXT
-    assert "Трейв, я оплатил 3000 рублей за отель" in PRIVATE_HELP_TEXT
+    assert "/app" in PRIVATE_HELP_TEXT
+    assert "500 рублей такси" in PRIVATE_HELP_TEXT
 
 
 def test_private_start_uses_clear_next_step_language():
