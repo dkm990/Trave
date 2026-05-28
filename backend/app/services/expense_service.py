@@ -26,8 +26,8 @@ class ExpenseInput:
     payer_user_id: int
     title: str
     amount: Decimal
-    currency: str
-    participant_user_ids: list[int]
+    currency: Optional[str] = None
+    participant_user_ids: list[int] = None  # type: ignore[assignment]
     category: Optional[str] = None
     created_by_user_id: Optional[int] = None
     status: str = "confirmed"
@@ -155,8 +155,10 @@ class ExpenseService:
             await self.session.execute(select(Trip).where(Trip.id == payload.trip_id))
         ).scalar_one()
 
+        effective_currency = (payload.currency or trip.default_currency or "RUB").upper()
+
         raw_base, rate_info = await self.currency.convert(
-            payload.amount, payload.currency.upper(), trip.default_currency
+            payload.amount, effective_currency, trip.default_currency
         )
 
         expense = Expense(
@@ -165,7 +167,7 @@ class ExpenseService:
             title=payload.title.strip()[:200],
             category=payload.category or None,
             amount_original=payload.amount,
-            currency_original=payload.currency.upper(),
+            currency_original=effective_currency,
             amount_base=_q2(raw_base),
             base_currency=trip.default_currency,
             exchange_rate=rate_info.rate,
@@ -190,7 +192,7 @@ class ExpenseService:
             custom_shares_base = {}
             for uid, share_orig in payload.custom_shares.items():
                 converted, _ = await self.currency.convert(
-                    share_orig, payload.currency.upper(), trip.default_currency
+                    share_orig, effective_currency, trip.default_currency
                 )
                 custom_shares_base[uid] = _q2(converted)
         elif mode == "by_percent" and payload.custom_shares:

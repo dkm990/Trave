@@ -109,6 +109,12 @@ export function ExpensesPage() {
     e.preventDefault();
     if (!tripId || !payer || !amount || !title.trim() || !participants.length) return;
 
+    const effectiveCurrency = currency || trip?.default_currency || "RUB";
+    if (!effectiveCurrency) {
+      setError("Валюта не выбрана");
+      return;
+    }
+
     if (splitMode === "by_amount") {
       const total = Object.values(customShares).reduce((s, v) => s + (Number(v) || 0), 0);
       if (Math.abs(total - Number(amount)) > 1) {
@@ -123,8 +129,8 @@ export function ExpensesPage() {
       const body: any = {
         payer_user_id: payer,
         title: title.trim(),
-        amount,
-        currency,
+        amount: Number(amount),
+        currency: effectiveCurrency,
         participant_user_ids: participants,
         split_mode: splitMode,
       };

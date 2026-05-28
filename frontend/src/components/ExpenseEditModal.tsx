@@ -116,7 +116,7 @@ export function ExpenseEditModal({ trip, expense, onClose, onSaved }: Props) {
     try {
       const payload: any = {
         title: title.trim(),
-        amount,
+        amount: Number(amount),
         currency: currency.toUpperCase(),
         category: category || undefined,
         payer_user_id: payer,

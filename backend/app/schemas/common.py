@@ -42,7 +42,7 @@ class ExpenseCreateRequest(BaseModel):
     payer_user_id: int
     title: str
     amount: Decimal
-    currency: str = Field(min_length=3, max_length=8)
+    currency: Optional[str] = Field(default=None, min_length=3, max_length=8)
     participant_user_ids: list[int]
     category: Optional[str] = None
     note: Optional[str] = None

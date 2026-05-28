@@ -18,6 +18,7 @@ from app.services.expense_service import (
 class _StubCurrencyInfo:
     def __init__(self, rate: Decimal):
         self.rate = rate
+        self.rate_date = datetime.now().date()
 
 
 class _StubCurrencyService:
