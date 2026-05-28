@@ -630,26 +630,58 @@ async def _generate_mimo_chat_response(text: str, *, context: str = "", trip_inf
 
 
 async def _generate_gemini_chat_response(text: str, *, context: str = "", trip_info: str = "") -> str:
-    return await get_ai_provider().generate_chat_response(
+    provider = _build_gemini_chat_provider()
+    if provider is None:
+        raise RuntimeError("gemini chat provider is not configured")
+    return await provider.generate_chat_response(
         text,
         context=context,
         trip_info=trip_info,
     )
 
 
+def _build_gemini_chat_provider():
+    settings = get_settings()
+    if not settings.gemini_api_key:
+        return None
+    try:
+        from app.ai.gemini_provider import GeminiProvider
+
+        return GeminiProvider()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Conversational provider=gemini status=init_error type=%s msg=%s",
+            type(exc).__name__,
+            str(exc)[:200],
+        )
+        return None
+
+
 async def _generate_conversational_response(text: str, *, context: str = "", trip_info: str = "") -> str:
     settings = get_settings()
     last_error: Exception | None = None
-    for provider_name in _chat_provider_order(settings):
+    configured_provider_count = 0
+    provider_order = _chat_provider_order(settings)
+    for provider_name in provider_order:
         started = time.monotonic()
         try:
             if provider_name == "mimo":
                 if not settings.mimo_api_key:
+                    logger.warning(
+                        "Conversational provider=%s status=skipped reason=missing_api_key",
+                        provider_name,
+                    )
                     continue
+                configured_provider_count += 1
                 raw = await _generate_mimo_chat_response(text, context=context, trip_info=trip_info)
             elif provider_name == "gemini":
                 if not settings.gemini_api_key:
+                    logger.warning(
+                        "Conversational provider=%s status=skipped reason=missing_api_key",
+                        provider_name,
+                    )
                     continue
+                configured_provider_count += 1
                 raw = await _generate_gemini_chat_response(text, context=context, trip_info=trip_info)
             else:
                 continue
@@ -660,6 +692,8 @@ async def _generate_conversational_response(text: str, *, context: str = "", tri
                 provider_name,
                 latency_ms,
             )
+            if response == CHAT_SAFE_FALLBACK:
+                raise RuntimeError("chat provider returned empty response")
             if "задумался" in response.lower() or "gemini недоступен" in response.lower():
                 raise RuntimeError("chat provider returned degraded fallback")
             return response
@@ -673,7 +707,13 @@ async def _generate_conversational_response(text: str, *, context: str = "", tri
                 str(exc)[:200],
                 latency_ms,
             )
-    logger.warning("Conversational fallback to safe message: %s", last_error)
+    if configured_provider_count == 0:
+        logger.warning(
+            "Conversational status=no_configured_providers order=%s",
+            ",".join(provider_order),
+        )
+    else:
+        logger.warning("Conversational fallback to safe message: %s", last_error)
     return CHAT_SAFE_FALLBACK
 
 
