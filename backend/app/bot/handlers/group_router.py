@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from aiogram import BaseMiddleware, F, Router
 from aiogram.enums import ChatType
 from aiogram.filters import Command, Filter
-from aiogram.types import Message, TelegramObject
+from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove, TelegramObject
 
 from app.bot.filters import GroupAddressedFilter, strip_mention, strip_trigger
 from app.bot.session import session_scope
@@ -36,6 +37,9 @@ NEW_TRIP_LONG_TITLE_TEXT = f"Название слишком длинное. М�
 NEW_TRIP_CREATE_ERROR_TEXT = "Сейчас не получилось создать поездку, попробуйте ещё раз."
 
 _pending_new_trip_titles: dict[tuple[int, int], bool] = {}
+_pending_new_trip_currency: dict[tuple[int, int], dict[str, object]] = {}
+_ISO_CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
+_OTHER_CURRENCY_LABEL = "Другая"
 
 
 def _pending_new_trip_key(message: Message) -> tuple[int, int] | None:
@@ -50,6 +54,12 @@ class PendingNewTripTitleFilter(Filter):
         return bool(key and _pending_new_trip_titles.get(key))
 
 
+class PendingNewTripCurrencyFilter(Filter):
+    async def __call__(self, message: Message) -> bool:
+        key = _pending_new_trip_key(message)
+        return bool(key and key in _pending_new_trip_currency)
+
+
 def _validate_new_trip_title(raw_title: str) -> tuple[str | None, str | None]:
     title = (raw_title or "").strip()
     if not title:
@@ -59,7 +69,32 @@ def _validate_new_trip_title(raw_title: str) -> tuple[str | None, str | None]:
     return title, None
 
 
-def _group_trip_created_text(title: str) -> str:
+def _currency_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="RUB"), KeyboardButton(text="USD"), KeyboardButton(text="EUR")],
+            [KeyboardButton(text="TRY"), KeyboardButton(text="IDR"), KeyboardButton(text=_OTHER_CURRENCY_LABEL)],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
+async def _ask_trip_currency(message: Message, title: str) -> None:
+    await message.answer(
+        f"В какой валюте вести поездку <b>{title}</b>?\nВыберите валюту поездки:",
+        reply_markup=_currency_keyboard(),
+    )
+
+
+def _normalize_currency_input(raw: str) -> str | None:
+    text = (raw or "").strip().upper()
+    if _ISO_CURRENCY_RE.match(text):
+        return text
+    return None
+
+
+def _group_trip_created_text(title: str, trip_currency: str) -> str:
     return (
         f"Поездка <b>{title}</b> создана.\n\n"
         "Теперь:\n"
@@ -199,40 +234,24 @@ async def group_new_trip(message: Message):
         await message.answer(error_text)
         return
 
-    try:
-        async with session_scope() as session:
-            user = await UserService(session).get_or_create(
-                telegram_user_id=message.from_user.id,
-                username=message.from_user.username,
-                first_name=message.from_user.first_name,
-                last_name=message.from_user.last_name,
-            )
-            trip = await TripService(session).create_trip(
-                title=title,
-                owner=user,
-                telegram_chat_id=message.chat.id,
-            )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "group_new_trip create failed chat=%s user=%s type=%s",
-            message.chat.id,
-            message.from_user.id if message.from_user else None,
-            type(exc).__name__,
-        )
-        await message.answer(NEW_TRIP_CREATE_ERROR_TEXT)
-        return
     if key:
         _pending_new_trip_titles.pop(key, None)
-    await message.answer(_group_trip_created_text(trip.title))
+        _pending_new_trip_currency[key] = {"title": title, "awaiting_custom": False}
+    await _ask_trip_currency(message, title)
 
 
 @router.message(Command("cancel"))
 async def group_cancel_new_trip(message: Message):
     key = _pending_new_trip_key(message)
-    if not key or not _pending_new_trip_titles.pop(key, None):
+    if not key:
         await message.answer("Сейчас нет создания поездки, которое нужно отменить.")
         return
-    await message.answer(NEW_TRIP_CANCELLED_TEXT)
+    had_title = bool(_pending_new_trip_titles.pop(key, None))
+    had_currency = bool(_pending_new_trip_currency.pop(key, None))
+    if not (had_title or had_currency):
+        await message.answer("Сейчас нет создания поездки, которое нужно отменить.")
+        return
+    await message.answer(NEW_TRIP_CANCELLED_TEXT, reply_markup=ReplyKeyboardRemove())
 
 
 @router.message(Command("trips"))
@@ -373,6 +392,43 @@ async def group_new_trip_title_input(message: Message):
         await message.answer(error_text)
         return
 
+    _pending_new_trip_titles.pop(key, None)
+    _pending_new_trip_currency[key] = {"title": title, "awaiting_custom": False}
+    await _ask_trip_currency(message, title)
+
+
+@router.message(PendingNewTripCurrencyFilter(), F.text)
+async def group_new_trip_currency_input(message: Message):
+    key = _pending_new_trip_key(message)
+    if not key:
+        return
+    state = _pending_new_trip_currency.get(key)
+    if not state:
+        return
+
+    text = (message.text or "").strip()
+    if not text or text.startswith("/"):
+        return
+
+    if text == _OTHER_CURRENCY_LABEL:
+        state["awaiting_custom"] = True
+        await message.answer("Введите код валюты из 3 латинских букв, например: IDR, TRY, GEL.")
+        return
+
+    currency = _normalize_currency_input(text)
+    if not currency:
+        if state.get("awaiting_custom"):
+            await message.answer("Некорректный код валюты. Введите ISO-код из 3 букв, например IDR.")
+        else:
+            await message.answer("Выберите валюту кнопкой или нажмите «Другая».")
+        return
+
+    title = str(state.get("title") or "").strip()
+    if not title:
+        _pending_new_trip_currency.pop(key, None)
+        await message.answer("Не удалось создать поездку: потеряно название. Начните заново: /newtrip")
+        return
+
     try:
         async with session_scope() as session:
             user = await UserService(session).get_or_create(
@@ -385,20 +441,22 @@ async def group_new_trip_title_input(message: Message):
                 title=title,
                 owner=user,
                 telegram_chat_id=message.chat.id,
+                trip_currency=currency,
             )
     except Exception as exc:  # noqa: BLE001
-        _pending_new_trip_titles.pop(key, None)
+        _pending_new_trip_currency.pop(key, None)
         logger.warning(
-            "group_new_trip_title_input create failed chat=%s user=%s type=%s",
+            "group_new_trip_currency_input create failed chat=%s user=%s type=%s",
             message.chat.id,
             message.from_user.id if message.from_user else None,
             type(exc).__name__,
         )
-        await message.answer(NEW_TRIP_CREATE_ERROR_TEXT)
+        await message.answer(NEW_TRIP_CREATE_ERROR_TEXT, reply_markup=ReplyKeyboardRemove())
         return
 
-    _pending_new_trip_titles.pop(key, None)
-    await message.answer(_group_trip_created_text(trip.title))
+    _pending_new_trip_currency.pop(key, None)
+    created_text = _group_trip_created_text(trip.title, currency) + f"\n\nВалюта поездки: {currency}"
+    await message.answer(created_text, reply_markup=ReplyKeyboardRemove())
 
 
 @router.message(GroupAddressedFilter(), F.text)

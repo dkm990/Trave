@@ -329,38 +329,19 @@ async def test_group_newtrip_without_title_asks_for_title():
 
 
 @pytest.mark.asyncio
-async def test_group_pending_title_same_user_creates_trip(monkeypatch):
+async def test_group_pending_title_same_user_shows_currency_picker(monkeypatch):
     from app.bot.handlers import group_router
 
-    created: list[tuple[str, int]] = []
-
-    class _UserService:
-        def __init__(self, session):
-            self.session = session
-
-        async def get_or_create(self, **kwargs):
-            return SimpleNamespace(id=77)
-
-    class _TripService:
-        def __init__(self, session):
-            self.session = session
-
-        async def create_trip(self, *, title: str, owner, telegram_chat_id=None):
-            created.append((title, telegram_chat_id))
-            return SimpleNamespace(id=9, title=title)
-
-    monkeypatch.setattr(group_router, "session_scope", lambda: _DummyScope())
-    monkeypatch.setattr(group_router, "UserService", _UserService)
-    monkeypatch.setattr(group_router, "TripService", _TripService)
     group_router._pending_new_trip_titles.clear()
+    group_router._pending_new_trip_currency.clear()
 
     await group_router.group_new_trip(_DummyMessage("group", text="/newtrip", chat_id=101, user_id=501))
     title_msg = _DummyMessage("group", text="Армения", chat_id=101, user_id=501)
     await group_router.group_new_trip_title_input(title_msg)
 
-    assert created == [("Армения", 101)]
     assert (101, 501) not in group_router._pending_new_trip_titles
-    assert "Поездка <b>Армения</b> создана." in title_msg.answers[0][0]
+    assert (101, 501) in group_router._pending_new_trip_currency
+    assert "Валюта" in title_msg.answers[0][0] or "валюте" in title_msg.answers[0][0]
 
 
 @pytest.mark.asyncio
@@ -404,47 +385,30 @@ async def test_group_cancel_clears_pending_newtrip():
     from app.bot.handlers import group_router
 
     group_router._pending_new_trip_titles.clear()
+    group_router._pending_new_trip_currency.clear()
     await group_router.group_new_trip(_DummyMessage("group", text="/newtrip", chat_id=101, user_id=501))
 
     cancel_msg = _DummyMessage("group", text="/cancel", chat_id=101, user_id=501)
     await group_router.group_cancel_new_trip(cancel_msg)
 
-    assert cancel_msg.answers == [(group_router.NEW_TRIP_CANCELLED_TEXT, None)]
+    assert cancel_msg.answers[0][0] == group_router.NEW_TRIP_CANCELLED_TEXT
     assert (101, 501) not in group_router._pending_new_trip_titles
+    assert (101, 501) not in group_router._pending_new_trip_currency
 
 
 @pytest.mark.asyncio
-async def test_group_newtrip_with_title_creates_immediately(monkeypatch):
+async def test_group_newtrip_with_title_shows_currency_picker():
     from app.bot.handlers import group_router
 
-    created: list[tuple[str, int]] = []
-
-    class _UserService:
-        def __init__(self, session):
-            self.session = session
-
-        async def get_or_create(self, **kwargs):
-            return SimpleNamespace(id=77)
-
-    class _TripService:
-        def __init__(self, session):
-            self.session = session
-
-        async def create_trip(self, *, title: str, owner, telegram_chat_id=None):
-            created.append((title, telegram_chat_id))
-            return SimpleNamespace(id=10, title=title)
-
-    monkeypatch.setattr(group_router, "session_scope", lambda: _DummyScope())
-    monkeypatch.setattr(group_router, "UserService", _UserService)
-    monkeypatch.setattr(group_router, "TripService", _TripService)
     group_router._pending_new_trip_titles.clear()
+    group_router._pending_new_trip_currency.clear()
 
     msg = _DummyMessage("group", text="/newtrip Армения", chat_id=102, user_id=502)
     await group_router.group_new_trip(msg)
 
-    assert created == [("Армения", 102)]
     assert (102, 502) not in group_router._pending_new_trip_titles
-    assert "Поездка <b>Армения</b> создана." in msg.answers[0][0]
+    assert (102, 502) in group_router._pending_new_trip_currency
+    assert "валюте" in msg.answers[0][0] or "Валюта" in msg.answers[0][0]
 
 
 @pytest.mark.asyncio
@@ -773,11 +737,125 @@ async def test_group_newtrip_create_error_responds_and_clears_pending(monkeypatc
     monkeypatch.setattr(group_router, "UserService", _UserService)
     monkeypatch.setattr(group_router, "TripService", _TripService)
     group_router._pending_new_trip_titles.clear()
+    group_router._pending_new_trip_currency.clear()
 
     await group_router.group_new_trip(_DummyMessage("group", text="/newtrip", chat_id=101, user_id=501))
     title_msg = _DummyMessage("group", text="Вьетнам", chat_id=101, user_id=501)
     await group_router.group_new_trip_title_input(title_msg)
 
-    assert len(title_msg.answers) == 1
-    assert "не получилось" in title_msg.answers[0][0].lower()
+    assert (101, 501) in group_router._pending_new_trip_currency
+
+    currency_msg = _DummyMessage("group", text="TRY", chat_id=101, user_id=501)
+    await group_router.group_new_trip_currency_input(currency_msg)
+
+    assert len(currency_msg.answers) == 1
+    assert "не получилось" in currency_msg.answers[0][0].lower()
+    assert (101, 501) not in group_router._pending_new_trip_currency
+
+
+@pytest.mark.asyncio
+async def test_group_currency_picker_try_creates_trip(monkeypatch):
+    from app.bot.handlers import group_router
+
+    created: list[tuple[str, str]] = []
+
+    class _UserService:
+        def __init__(self, session):
+            pass
+
+        async def get_or_create(self, **kwargs):
+            return SimpleNamespace(id=77)
+
+    class _TripService:
+        def __init__(self, session):
+            pass
+
+        async def create_trip(self, *, title, owner, telegram_chat_id=None, trip_currency=None, **kwargs):
+            created.append((title, trip_currency))
+            return SimpleNamespace(id=9, title=title)
+
+    monkeypatch.setattr(group_router, "session_scope", lambda: _DummyScope())
+    monkeypatch.setattr(group_router, "UserService", _UserService)
+    monkeypatch.setattr(group_router, "TripService", _TripService)
+    group_router._pending_new_trip_titles.clear()
+    group_router._pending_new_trip_currency.clear()
+
+    await group_router.group_new_trip(_DummyMessage("group", text="/newtrip", chat_id=101, user_id=501))
+    await group_router.group_new_trip_title_input(_DummyMessage("group", text="Турция", chat_id=101, user_id=501))
+    currency_msg = _DummyMessage("group", text="TRY", chat_id=101, user_id=501)
+    await group_router.group_new_trip_currency_input(currency_msg)
+
+    assert created == [("Турция", "TRY")]
+    assert (101, 501) not in group_router._pending_new_trip_currency
+    assert "Поездка" in currency_msg.answers[0][0]
+    assert "создана" in currency_msg.answers[0][0]
+
+
+@pytest.mark.asyncio
+async def test_group_currency_picker_other_currency_flow(monkeypatch):
+    from app.bot.handlers import group_router
+
+    created: list[tuple[str, str]] = []
+
+    class _UserService:
+        def __init__(self, session):
+            pass
+
+        async def get_or_create(self, **kwargs):
+            return SimpleNamespace(id=77)
+
+    class _TripService:
+        def __init__(self, session):
+            pass
+
+        async def create_trip(self, *, title, owner, telegram_chat_id=None, trip_currency=None, **kwargs):
+            created.append((title, trip_currency))
+            return SimpleNamespace(id=9, title=title)
+
+    monkeypatch.setattr(group_router, "session_scope", lambda: _DummyScope())
+    monkeypatch.setattr(group_router, "UserService", _UserService)
+    monkeypatch.setattr(group_router, "TripService", _TripService)
+    group_router._pending_new_trip_titles.clear()
+    group_router._pending_new_trip_currency.clear()
+
+    await group_router.group_new_trip(_DummyMessage("group", text="/newtrip", chat_id=101, user_id=501))
+    await group_router.group_new_trip_title_input(_DummyMessage("group", text="Грузия", chat_id=101, user_id=501))
+
+    other_msg = _DummyMessage("group", text="Другая", chat_id=101, user_id=501)
+    await group_router.group_new_trip_currency_input(other_msg)
+    assert "Введите код валюты" in other_msg.answers[0][0]
+
+    custom_msg = _DummyMessage("group", text="GEL", chat_id=101, user_id=501)
+    await group_router.group_new_trip_currency_input(custom_msg)
+
+    assert created == [("Грузия", "GEL")]
+    assert (101, 501) not in group_router._pending_new_trip_currency
+
+
+@pytest.mark.asyncio
+async def test_group_currency_picker_invalid_input():
+    from app.bot.handlers import group_router
+
+    group_router._pending_new_trip_titles.clear()
+    group_router._pending_new_trip_currency.clear()
+    group_router._pending_new_trip_currency[(101, 501)] = {"title": "Турция", "awaiting_custom": False}
+
+    msg = _DummyMessage("group", text="abc123", chat_id=101, user_id=501)
+    await group_router.group_new_trip_currency_input(msg)
+
+    assert "кнопкой" in msg.answers[0][0].lower() or "Другая" in msg.answers[0][0]
+
+
+@pytest.mark.asyncio
+async def test_group_currency_picker_cancel_clears_all():
+    from app.bot.handlers import group_router
+
+    group_router._pending_new_trip_titles.clear()
+    group_router._pending_new_trip_currency.clear()
+    group_router._pending_new_trip_currency[(101, 501)] = {"title": "Турция", "awaiting_custom": False}
+
+    cancel_msg = _DummyMessage("group", text="/cancel", chat_id=101, user_id=501)
+    await group_router.group_cancel_new_trip(cancel_msg)
+
+    assert (101, 501) not in group_router._pending_new_trip_currency
     assert (101, 501) not in group_router._pending_new_trip_titles
