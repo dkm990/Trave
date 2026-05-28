@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.expense import Expense, ExpenseShare
+from app.models.payment import Payment
 
 
 # Все суммы для отображения нормализуем к этой точности.
@@ -37,6 +38,7 @@ class DebtTransfer:
 def calculate_balances_from_rows(
     expense_rows: Iterable[tuple[int, Decimal]],  # (payer_user_id, amount_base)
     share_rows: Iterable[tuple[int, Decimal]],   # (user_id, share_amount_base)
+    payment_rows: Iterable[tuple[int, int, Decimal]] = (),  # (from_user_id, to_user_id, amount_base)
 ) -> List[UserBalance]:
     paid: dict[int, Decimal] = {}
     owes: dict[int, Decimal] = {}
@@ -47,12 +49,18 @@ def calculate_balances_from_rows(
     for user_id, share in share_rows:
         owes[user_id] = owes.get(user_id, Decimal("0")) + Decimal(share)
 
-    user_ids = set(paid) | set(owes)
+    adjustments: dict[int, Decimal] = {}
+    for from_uid, to_uid, amount in payment_rows:
+        amt = Decimal(amount)
+        adjustments[from_uid] = adjustments.get(from_uid, Decimal("0")) + amt
+        adjustments[to_uid] = adjustments.get(to_uid, Decimal("0")) - amt
+
+    user_ids = set(paid) | set(owes) | set(adjustments)
     result: list[UserBalance] = []
     for uid in user_ids:
         p = _q(paid.get(uid, Decimal("0")))
         o = _q(owes.get(uid, Decimal("0")))
-        net = p - o
+        net = p - o + _q(adjustments.get(uid, Decimal("0")))
         # Snap-to-zero: микрохвосты от конвертации/округления считаем за ноль.
         if abs(net) < ZERO_EPSILON:
             net = Decimal("0.00")
@@ -119,10 +127,17 @@ class BalanceService:
                 .where(Expense.trip_id == trip_id, Expense.status == "confirmed")
             )
         ).all()
+        payments = (
+            await self.session.execute(
+                select(Payment.from_user_id, Payment.to_user_id, Payment.amount_base)
+                .where(Payment.trip_id == trip_id, Payment.status == "active")
+            )
+        ).all()
 
         return calculate_balances_from_rows(
             [(r[0], r[1]) for r in expenses],
             [(r[0], r[1]) for r in shares],
+            [(r[0], r[1], r[2]) for r in payments],
         )
 
     async def simplified_debts(self, trip_id: int) -> List[DebtTransfer]:

@@ -11,6 +11,7 @@ from app.api import balances as balance_routes
 from app.api import currency as currency_routes
 from app.api import documents as document_routes
 from app.api import flights as flight_routes
+from app.api import payments as payment_routes
 from app.api import trips as trip_routes
 from app.api import webhook as webhook_routes
 from app.config import get_settings
@@ -48,6 +49,7 @@ def create_app() -> FastAPI:
     app.include_router(webhook_routes.router)
     app.include_router(flight_routes.flight_router)
     app.include_router(flight_routes.status_router)
+    app.include_router(payment_routes.router)
 
     @app.get("/health")
     async def health():

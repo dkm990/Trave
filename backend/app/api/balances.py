@@ -26,6 +26,7 @@ async def get_balances(
     balances = await svc.calculate_balances(trip_id)
     transfers = simplify_debts(balances)
     return BalancesResponse(
+        trip_currency=trip.trip_currency,
         base_currency=trip.default_currency,
         balances=[BalanceOut(user_id=b.user_id, paid=b.paid, owes=b.owes, net=b.net) for b in balances],
         transfers=[DebtOut(from_user_id=t.from_user_id, to_user_id=t.to_user_id, amount=t.amount) for t in transfers],

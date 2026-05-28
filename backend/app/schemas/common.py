@@ -104,9 +104,35 @@ class DebtOut(BaseModel):
 
 
 class BalancesResponse(BaseModel):
+    trip_currency: str
     base_currency: str
     balances: list[BalanceOut]
     transfers: list[DebtOut]
+
+
+class PaymentCreateRequest(BaseModel):
+    from_user_id: int
+    to_user_id: int
+    amount: Decimal
+    currency: str = Field(min_length=3, max_length=8)
+    note: Optional[str] = None
+
+
+class PaymentOut(ORMModel):
+    id: int
+    trip_id: int
+    from_user_id: int
+    to_user_id: int
+    amount_original: Decimal
+    currency_original: str
+    amount_base: Decimal
+    base_currency: str
+    exchange_rate: Decimal
+    status: str
+    note: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    canceled_at: Optional[datetime] = None
 
 
 class CurrencyRateOut(BaseModel):
