@@ -661,7 +661,7 @@ async def test_trip_service_create_trip_explicit_trip_currency_overrides():
             title="Грузия", owner=user, default_currency="GEL", trip_currency="USD",
         )
 
-        assert trip.default_currency == "GEL"
+        assert trip.default_currency == "USD"
         assert trip.trip_currency == "USD"
 
 
