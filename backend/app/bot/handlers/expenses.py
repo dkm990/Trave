@@ -223,7 +223,7 @@ async def propose_expense_from_intent(
     payload = intent.payload
     send = message.reply if use_reply else message.answer
 
-    if not payload.get("amount") or not payload.get("currency"):
+    if not payload.get("amount"):
         await send(
             "Не понял расход.\n\n"
             "Попробуйте так:\n"
@@ -265,7 +265,7 @@ async def propose_expense_from_intent(
 
     title = payload.get("title", "Расход")
     amount = payload["amount"]
-    currency = payload["currency"]
+    currency = payload.get("currency") or trip.default_currency or "RUB"
     category = payload.get("category")
 
     # --- неровное деление: разрешаем имена в custom_shares ---

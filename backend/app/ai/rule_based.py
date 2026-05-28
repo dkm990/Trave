@@ -345,6 +345,36 @@ class RuleBasedProvider(AIProvider):
                 confidence=0.5, has_verb=False,
             )
 
+        # Fallback: amount without currency + paid verb → add_expense with currency=None
+        if _looks_like_paid(t):
+            amount_only = re.search(
+                r"(\d{1,3}(?:[ .,\u00a0]\d{3})+(?:[.,]\d+)?(?:\s*[kkкКmMмМ]{1,2})?|"
+                r"\d+(?:[.,]\d+)?(?:\s*[kkкКmMмМ]{1,2})?)",
+                t,
+            )
+            if amount_only:
+                amount = _parse_amount(amount_only.group(1))
+                if amount and amount > 0:
+                    title = _extract_title(normalized, amount_only)
+                    if not title or len(title) < 2:
+                        title = "Расход"
+                    category = _detect_category(title, t)
+                    participants = _detect_participants(original)
+                    split_scope = "mentioned" if participants else "self"
+                    return Intent(
+                        action="add_expense",
+                        confidence=0.6,
+                        payload={
+                            "amount": str(amount), "currency": None,
+                            "title": title, "payer_name": None,
+                            "participant_names": participants or None,
+                            "split_scope": split_scope, "split_all": False,
+                            "split_count": None, "category": category,
+                        },
+                        raw_text=original,
+                        needs_confirmation=True,
+                    )
+
         # currency-prefix amount: "₺250"
         m_prefix = re.search(
             r"([₽$€¥£₫₺])\s*(\d{1,3}(?:[ .,\u00a0]\d{3})*(?:[.,]\d+)?(?:\s*[kkкКmMмМ]{1,2})?|"
@@ -449,8 +479,10 @@ class RuleBasedProvider(AIProvider):
     ) -> Intent:
         amount = _parse_amount(money.group(1))
         currency = _detect_currency(money.group(2))
-        if not amount or not currency:
+        if not amount:
             return Intent(action="unknown", confidence=0.0, raw_text=original)
+        if not currency:
+            currency = None
         title = _extract_title(normalized, money)
         if not title or len(title) < 2:
             title = "Расход"
