@@ -16,6 +16,7 @@ from app.services.travel_intent_service import (
     TravelIntentService,
     TravelWeatherIntent,
 )
+from app.services.web_search_service import WebSearchResult
 
 
 class _DummyScope:
@@ -69,6 +70,13 @@ def _settings(*, enabled: bool):
         ai_provider="rule_based",
         enable_travel_intent_extractor=enabled,
         conversational_provider_order="mimo,gemini",
+        travel_web_search_enabled=False,
+        web_search_provider="tavily",
+        web_search_api_key="",
+        web_search_base_url="https://api.tavily.com",
+        web_search_timeout_seconds=10,
+        web_search_max_results=5,
+        web_search_cache_ttl_seconds=21600,
         mimo_api_key="mimo-key",
         mimo_base_url="https://token-plan-sgp.xiaomimimo.com/v1",
         mimo_model="mimo-v2.5-pro",
@@ -926,3 +934,208 @@ async def test_expense_message_with_trigger_still_routes_to_expense_parser(monke
     ok = await intent_router.handle_intent_text(msg, msg.text, source="trigger", use_reply=True)
     assert ok is True
     assert calls == ["add_expense"]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Трейв, какие eSIM лучше взять в Турцию?", True),
+        ("Трейв, сколько стоит eSIM в Турции на 10 дней?", True),
+        ("Трейв, проверь ручную кладь Уральских авиалиний", True),
+        ("Трейв, нужна ли виза в Турцию для россиян сейчас?", True),
+        ("Трейв, какая разница во времени в Турции?", False),
+        ("Трейв, что посмотреть в Стамбуле за 2 дня?", False),
+        ("Трейв, 500 рублей такси", False),
+    ],
+)
+def test_should_use_web_search_decision(text, expected):
+    assert intent_router.should_use_web_search(text) is expected
+
+
+@pytest.mark.asyncio
+async def test_chat_response_search_disabled_does_not_call_service(monkeypatch):
+    s = _settings(enabled=True)
+    s.travel_web_search_enabled = False
+    calls = {"search": 0}
+    class _Mem:
+        async def get_recent_memories(self, chat_id):
+            return []
+        def format_memories_for_context(self, memories):
+            return ""
+
+    class _SearchService:
+        async def search(self, query):
+            calls["search"] += 1
+            return []
+
+    async def _chat(*args, **kwargs):
+        return "ok"
+
+    monkeypatch.setattr(intent_router, "get_settings", lambda: s)
+    monkeypatch.setattr("app.services.group_memory_service.GroupMemoryService", lambda session: _Mem())
+    monkeypatch.setattr(intent_router, "WebSearchService", _SearchService)
+    monkeypatch.setattr(intent_router, "_generate_conversational_response", _chat)
+    monkeypatch.setattr(intent_router, "session_scope", lambda: _DummyScope())
+    monkeypatch.setattr(intent_router, "_resolve_active_trip", lambda session, message: asyncio.sleep(0, result=None))
+
+    msg = _DummyMessage("Трейв, какие esim лучше взять в Турцию?", chat_type="group")
+    await intent_router._chat_response(msg, msg.text, msg.reply)
+    assert calls["search"] == 0
+    assert msg.replies == ["ok"]
+
+
+@pytest.mark.asyncio
+async def test_chat_response_search_enabled_calls_service_and_passes_context(monkeypatch):
+    s = _settings(enabled=True)
+    s.travel_web_search_enabled = True
+    captured: dict[str, str] = {}
+    class _Mem:
+        async def get_recent_memories(self, chat_id):
+            return []
+        def format_memories_for_context(self, memories):
+            return ""
+
+    class _SearchService:
+        async def search(self, query):
+            return [
+                WebSearchResult(
+                    title="Airalo Turkey plans",
+                    url="https://example.com/airalo",
+                    snippet="10GB 30 days data plan",
+                    source="example.com",
+                )
+            ]
+
+    async def _chat(text, **kwargs):
+        captured["web_search_context"] = kwargs.get("web_search_context", "")
+        return "ok"
+
+    monkeypatch.setattr(intent_router, "get_settings", lambda: s)
+    monkeypatch.setattr("app.services.group_memory_service.GroupMemoryService", lambda session: _Mem())
+    monkeypatch.setattr(intent_router, "WebSearchService", _SearchService)
+    monkeypatch.setattr(intent_router, "_generate_conversational_response", _chat)
+    monkeypatch.setattr(intent_router, "session_scope", lambda: _DummyScope())
+    monkeypatch.setattr(intent_router, "_resolve_active_trip", lambda session, message: asyncio.sleep(0, result=None))
+
+    msg = _DummyMessage("Трейв, какие esim лучше взять в Турцию?", chat_type="group")
+    await intent_router._chat_response(msg, msg.text, msg.reply)
+    assert "Airalo Turkey plans" in captured["web_search_context"]
+    assert "https://example.com/airalo" in captured["web_search_context"]
+    assert msg.replies == ["ok"]
+
+
+@pytest.mark.asyncio
+async def test_chat_response_search_timeout_still_uses_mimo(monkeypatch):
+    s = _settings(enabled=True)
+    s.travel_web_search_enabled = True
+    captured = {"unavailable": False}
+    class _Mem:
+        async def get_recent_memories(self, chat_id):
+            return []
+        def format_memories_for_context(self, memories):
+            return ""
+
+    class _SearchService:
+        async def search(self, query):
+            raise TimeoutError("timeout")
+
+    async def _chat(text, **kwargs):
+        captured["unavailable"] = kwargs.get("web_search_unavailable", False)
+        return "ok"
+
+    monkeypatch.setattr(intent_router, "get_settings", lambda: s)
+    monkeypatch.setattr("app.services.group_memory_service.GroupMemoryService", lambda session: _Mem())
+    monkeypatch.setattr(intent_router, "WebSearchService", _SearchService)
+    monkeypatch.setattr(intent_router, "_generate_conversational_response", _chat)
+    monkeypatch.setattr(intent_router, "session_scope", lambda: _DummyScope())
+    monkeypatch.setattr(intent_router, "_resolve_active_trip", lambda session, message: asyncio.sleep(0, result=None))
+
+    msg = _DummyMessage("Трейв, проверь ручную кладь Уральских авиалиний", chat_type="group")
+    await intent_router._chat_response(msg, msg.text, msg.reply)
+    assert captured["unavailable"] is True
+    assert msg.replies == ["ok"]
+
+
+@pytest.mark.asyncio
+async def test_chat_response_search_empty_results_do_not_crash(monkeypatch):
+    s = _settings(enabled=True)
+    s.travel_web_search_enabled = True
+    class _Mem:
+        async def get_recent_memories(self, chat_id):
+            return []
+        def format_memories_for_context(self, memories):
+            return ""
+
+    class _SearchService:
+        async def search(self, query):
+            return []
+
+    async def _chat(text, **kwargs):
+        return "ok"
+
+    monkeypatch.setattr(intent_router, "get_settings", lambda: s)
+    monkeypatch.setattr("app.services.group_memory_service.GroupMemoryService", lambda session: _Mem())
+    monkeypatch.setattr(intent_router, "WebSearchService", _SearchService)
+    monkeypatch.setattr(intent_router, "_generate_conversational_response", _chat)
+    monkeypatch.setattr(intent_router, "session_scope", lambda: _DummyScope())
+    monkeypatch.setattr(intent_router, "_resolve_active_trip", lambda session, message: asyncio.sleep(0, result=None))
+
+    msg = _DummyMessage("Трейв, какие esim лучше взять в Турцию?", chat_type="group")
+    await intent_router._chat_response(msg, msg.text, msg.reply)
+    assert msg.replies == ["ok"]
+
+
+@pytest.mark.asyncio
+async def test_expense_message_does_not_trigger_web_search(monkeypatch):
+    calls = {"search": 0}
+
+    class _SearchService:
+        async def search(self, query):
+            calls["search"] += 1
+            return []
+
+    async def _fake_propose(message, intent, *, source, use_reply=False):
+        await message.reply("expense")
+
+    s = _settings(enabled=True)
+    s.travel_web_search_enabled = True
+    monkeypatch.setattr(intent_router, "get_settings", lambda: s)
+    monkeypatch.setattr(intent_router, "WebSearchService", _SearchService)
+    monkeypatch.setattr("app.bot.handlers.expenses.propose_expense_from_intent", _fake_propose)
+
+    msg = _DummyMessage("Трейв, 500 рублей такси", chat_type="group")
+    ok = await intent_router.handle_intent_text(msg, msg.text, source="trigger", use_reply=True)
+    assert ok is True
+    assert calls["search"] == 0
+    assert msg.replies == ["expense"]
+
+
+@pytest.mark.asyncio
+async def test_web_search_logs_do_not_leak_api_key(monkeypatch, caplog):
+    s = _settings(enabled=True)
+    s.travel_web_search_enabled = True
+    class _Mem:
+        async def get_recent_memories(self, chat_id):
+            return []
+        def format_memories_for_context(self, memories):
+            return ""
+
+    class _SearchService:
+        async def search(self, query):
+            raise RuntimeError("search failed")
+
+    async def _chat(text, **kwargs):
+        return "ok"
+
+    monkeypatch.setattr(intent_router, "get_settings", lambda: s)
+    monkeypatch.setattr("app.services.group_memory_service.GroupMemoryService", lambda session: _Mem())
+    monkeypatch.setattr(intent_router, "WebSearchService", _SearchService)
+    monkeypatch.setattr(intent_router, "_generate_conversational_response", _chat)
+    monkeypatch.setattr(intent_router, "session_scope", lambda: _DummyScope())
+    monkeypatch.setattr(intent_router, "_resolve_active_trip", lambda session, message: asyncio.sleep(0, result=None))
+
+    with caplog.at_level(logging.WARNING):
+        msg = _DummyMessage("Трейв, сколько стоит esim в Турции?", chat_type="group")
+        await intent_router._chat_response(msg, msg.text, msg.reply)
+
+    assert "mimo-key" not in "\n".join(rec.getMessage() for rec in caplog.records)

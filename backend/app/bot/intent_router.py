@@ -39,6 +39,7 @@ from app.services.travel_intent_service import (
 )
 from app.services.trip_service import TripService
 from app.services.user_service import UserService
+from app.services.web_search_service import WebSearchResult, WebSearchService
 from app.services.weather_service import get_weather
 
 if TYPE_CHECKING:
@@ -78,6 +79,45 @@ _MONTHS_RU_TO_NUM: dict[str, int] = {
 _WEATHER_RE = re.compile(
     r"(?:погод|weather|сколько\s+градусов|температур|дождь|снег|ветер|влажность)",
     re.IGNORECASE,
+)
+
+_WEB_SEARCH_TRIGGERS = (
+    "esim",
+    "e-sim",
+    "сим",
+    "интернет в поездке",
+    "цена",
+    "стоим",
+    "сколько стоит",
+    "правила",
+    "багаж",
+    "ручная кладь",
+    "авиакомпан",
+    "виза",
+    "въезд",
+    "погода",
+    "расписани",
+    "забастов",
+    "новост",
+    "ограничени",
+    "комисси",
+    "лимит",
+    "актуально",
+    "сейчас",
+    "проверь",
+    "найди",
+    "посмотри в интернете",
+    "лучшие варианты",
+)
+
+_WEB_SEARCH_SKIP_PATTERNS = (
+    "разница во времени",
+    "что посмотреть",
+    "маршрут",
+    "packing list",
+    "чеклист",
+    "переведи",
+    "перевод",
 )
 
 # ── City name noise stripping ──
@@ -563,11 +603,23 @@ async def _chat_response(message: Message, text: str, send) -> None:
             trip_info = f"Поездка: {trip.title}, валюта: {trip.default_currency}"
 
     context = "\n\n".join(context_parts) if context_parts else ""
+    web_search_context = ""
+    web_search_unavailable = False
+    settings = get_settings()
+
+    if settings.travel_web_search_enabled and should_use_web_search(text):
+        web_results = await _fetch_web_search_results(text)
+        if web_results:
+            web_search_context = _format_web_search_context(web_results)
+        else:
+            web_search_unavailable = True
 
     response = await _generate_conversational_response(
         text,
         context=context,
         trip_info=trip_info,
+        web_search_context=web_search_context,
+        web_search_unavailable=web_search_unavailable,
     )
     await send(response)
 
@@ -597,7 +649,47 @@ def _chat_provider_order(settings) -> list[str]:
     return order
 
 
-def _build_chat_prompt(text: str, *, context: str = "", trip_info: str = "") -> str:
+def should_use_web_search(text: str) -> bool:
+    normalized = (text or "").lower()
+    if not normalized:
+        return False
+    if _looks_like_expense_text(normalized):
+        return False
+    if any(pattern in normalized for pattern in _WEB_SEARCH_SKIP_PATTERNS):
+        return False
+    return any(token in normalized for token in _WEB_SEARCH_TRIGGERS)
+
+
+async def _fetch_web_search_results(text: str) -> list[WebSearchResult]:
+    try:
+        service = WebSearchService()
+        return await service.search(text)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "web_search provider=tavily status=error type=%s",
+            type(exc).__name__,
+        )
+        return []
+
+
+def _format_web_search_context(results: list[WebSearchResult]) -> str:
+    rows: list[str] = []
+    for idx, item in enumerate(results[:5], start=1):
+        snippet = (item.snippet or "").strip()
+        if len(snippet) > 280:
+            snippet = snippet[:279].rstrip() + "…"
+        rows.append(f"{idx}. {item.title}\nURL: {item.url}\nФрагмент: {snippet}")
+    return "\n\n".join(rows)
+
+
+def _build_chat_prompt(
+    text: str,
+    *,
+    context: str = "",
+    trip_info: str = "",
+    web_search_context: str = "",
+    web_search_unavailable: bool = False,
+) -> str:
     parts = []
     if context:
         parts.append(f"Контекст чата:\n{context}")
@@ -607,7 +699,43 @@ def _build_chat_prompt(text: str, *, context: str = "", trip_info: str = "") -> 
     return "\n\n".join(parts)
 
 
-async def _generate_mimo_chat_response(text: str, *, context: str = "", trip_info: str = "") -> str:
+def _build_chat_prompt_with_search(
+    text: str,
+    *,
+    context: str = "",
+    trip_info: str = "",
+    web_search_context: str = "",
+    web_search_unavailable: bool = False,
+) -> str:
+    parts: list[str] = []
+    if context:
+        parts.append(f"Контекст чата:\n{context}")
+    if trip_info:
+        parts.append(f"Информация о поездке:\n{trip_info}")
+    if web_search_context:
+        parts.append(
+            "Актуальные данные из интернета (кратко, используй как проверяемый контекст):\n"
+            f"{web_search_context}\n\n"
+            "Если данных недостаточно, явно пометь это. Ответ дай коротко: 3-6 пунктов. "
+            "В конце добавь строку 'Источники:' со списком сайтов."
+        )
+    elif web_search_unavailable:
+        parts.append(
+            "Не удалось проверить актуальные данные в интернете. "
+            "Отвечай по общим ориентирам и явно скажи, что цены/правила нужно перепроверить."
+        )
+    parts.append(f"Сообщение пользователя:\n{text}")
+    return "\n\n".join(parts)
+
+
+async def _generate_mimo_chat_response(
+    text: str,
+    *,
+    context: str = "",
+    trip_info: str = "",
+    web_search_context: str = "",
+    web_search_unavailable: bool = False,
+) -> str:
     settings = get_settings()
     if not settings.mimo_api_key:
         raise RuntimeError("mimo chat provider is not configured")
@@ -625,7 +753,13 @@ async def _generate_mimo_chat_response(text: str, *, context: str = "", trip_inf
     )
     return await provider.generate_text(
         system_instruction=CHAT_SYSTEM_PROMPT,
-        prompt=_build_chat_prompt(text, context=context, trip_info=trip_info),
+        prompt=_build_chat_prompt_with_search(
+            text,
+            context=context,
+            trip_info=trip_info,
+            web_search_context=web_search_context,
+            web_search_unavailable=web_search_unavailable,
+        ),
     )
 
 
@@ -657,7 +791,14 @@ def _build_gemini_chat_provider():
         return None
 
 
-async def _generate_conversational_response(text: str, *, context: str = "", trip_info: str = "") -> str:
+async def _generate_conversational_response(
+    text: str,
+    *,
+    context: str = "",
+    trip_info: str = "",
+    web_search_context: str = "",
+    web_search_unavailable: bool = False,
+) -> str:
     settings = get_settings()
     last_error: Exception | None = None
     configured_provider_count = 0
@@ -673,7 +814,14 @@ async def _generate_conversational_response(text: str, *, context: str = "", tri
                     )
                     continue
                 configured_provider_count += 1
-                raw = await _generate_mimo_chat_response(text, context=context, trip_info=trip_info)
+                mimo_kwargs: dict[str, object] = {
+                    "context": context,
+                    "trip_info": trip_info,
+                }
+                if web_search_context or web_search_unavailable:
+                    mimo_kwargs["web_search_context"] = web_search_context
+                    mimo_kwargs["web_search_unavailable"] = web_search_unavailable
+                raw = await _generate_mimo_chat_response(text, **mimo_kwargs)
             elif provider_name == "gemini":
                 if not settings.gemini_api_key:
                     logger.warning(

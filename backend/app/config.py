@@ -92,6 +92,15 @@ class Settings(BaseSettings):
     mimo_top_p: float = 0.95
     mimo_benchmark_models: str = "mimo-v2.5-pro,mimo-v2-flash"
 
+    # Travel web search (optional)
+    travel_web_search_enabled: bool = False
+    web_search_provider: str = "tavily"
+    web_search_api_key: str = ""
+    web_search_base_url: str = "https://api.tavily.com"
+    web_search_timeout_seconds: int = 10
+    web_search_max_results: int = 5
+    web_search_cache_ttl_seconds: int = 21600
+
     # CORS
     cors_origins: str = "*"
 
