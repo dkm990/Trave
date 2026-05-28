@@ -16,10 +16,24 @@ class _DummyScope:
 
 
 class _DummyMessage:
-    def __init__(self, chat_type: str, text: str = "", chat_id: int = 1, user_id: int = 1, bot=None):
+    def __init__(
+        self,
+        chat_type: str,
+        text: str = "",
+        chat_id: int = 1,
+        user_id: int | None = 1,
+        bot=None,
+        sender_chat_id: int | None = None,
+    ):
         self.chat = SimpleNamespace(type=chat_type, id=chat_id)
-        self.from_user = SimpleNamespace(
-            id=user_id, username="tester", first_name="Test", last_name="User"
+        if user_id is None:
+            self.from_user = None
+        else:
+            self.from_user = SimpleNamespace(
+                id=user_id, username="tester", first_name="Test", last_name="User"
+            )
+        self.sender_chat = (
+            SimpleNamespace(id=sender_chat_id) if sender_chat_id is not None else None
         )
         self.text = text
         self.bot = bot or SimpleNamespace(
@@ -311,7 +325,7 @@ async def test_group_newtrip_without_title_asks_for_title():
     await group_router.group_new_trip(msg)
 
     assert msg.answers == [(group_router.NEW_TRIP_PROMPT, None)]
-    assert group_router._pending_new_trip_titles.get((101, 501)) is True
+    assert group_router._pending_new_trip_titles.get((101, "user", 501)) is True
 
 
 @pytest.mark.asyncio
@@ -345,8 +359,20 @@ async def test_group_pending_title_same_user_creates_trip(monkeypatch):
     await group_router.group_new_trip_title_input(title_msg)
 
     assert created == [("Армения", 101)]
-    assert (101, 501) not in group_router._pending_new_trip_titles
+    assert (101, "user", 501) not in group_router._pending_new_trip_titles
     assert "Поездка <b>Армения</b> создана." in title_msg.answers[0][0]
+
+
+@pytest.mark.asyncio
+async def test_group_newtrip_requires_non_anonymous_user():
+    from app.bot.handlers import group_router
+
+    group_router._pending_new_trip_titles.clear()
+
+    msg = _DummyMessage("group", text="/newtrip", chat_id=101, user_id=None, sender_chat_id=-9001)
+    await group_router.group_new_trip(msg)
+    assert msg.answers == [(group_router.NEW_TRIP_USER_REQUIRED_TEXT, None)]
+    assert group_router._pending_new_trip_titles == {}
 
 
 @pytest.mark.asyncio
@@ -382,7 +408,7 @@ async def test_group_pending_title_other_user_does_not_create_trip(monkeypatch):
 
     assert created == []
     assert other_msg.answers == []
-    assert group_router._pending_new_trip_titles.get((101, 501)) is True
+    assert group_router._pending_new_trip_titles.get((101, "user", 501)) is True
 
 
 @pytest.mark.asyncio
@@ -396,7 +422,7 @@ async def test_group_cancel_clears_pending_newtrip():
     await group_router.group_cancel_new_trip(cancel_msg)
 
     assert cancel_msg.answers == [(group_router.NEW_TRIP_CANCELLED_TEXT, None)]
-    assert (101, 501) not in group_router._pending_new_trip_titles
+    assert (101, "user", 501) not in group_router._pending_new_trip_titles
 
 
 @pytest.mark.asyncio
@@ -429,7 +455,7 @@ async def test_group_newtrip_with_title_creates_immediately(monkeypatch):
     await group_router.group_new_trip(msg)
 
     assert created == [("Армения", 102)]
-    assert (102, 502) not in group_router._pending_new_trip_titles
+    assert (102, "user", 502) not in group_router._pending_new_trip_titles
     assert "Поездка <b>Армения</b> создана." in msg.answers[0][0]
 
 
@@ -478,7 +504,7 @@ async def test_commands_during_pending_are_not_treated_as_trip_title(monkeypatch
 
     assert created == []
     assert command_msg.answers == []
-    assert group_router._pending_new_trip_titles.get((103, 503)) is True
+    assert group_router._pending_new_trip_titles.get((103, "user", 503)) is True
 
 
 @pytest.mark.asyncio
@@ -491,7 +517,22 @@ async def test_group_pending_filter_matches_only_same_user_pending():
     other = _DummyMessage("group", text="Армения", chat_id=555, user_id=778)
 
     assert await flt(same) is False
-    group_router._pending_new_trip_titles[(555, 777)] = True
+    group_router._pending_new_trip_titles[(555, "user", 777)] = True
+    assert await flt(same) is True
+    assert await flt(other) is False
+
+
+@pytest.mark.asyncio
+async def test_group_pending_filter_supports_sender_chat_key():
+    from app.bot.handlers import group_router
+
+    group_router._pending_new_trip_titles.clear()
+    flt = group_router.PendingNewTripTitleFilter()
+    same = _DummyMessage("group", text="Вьетнам", chat_id=555, user_id=None, sender_chat_id=-444)
+    other = _DummyMessage("group", text="Вьетнам", chat_id=555, user_id=None, sender_chat_id=-445)
+
+    assert await flt(same) is False
+    group_router._pending_new_trip_titles[(555, "sender_chat", -444)] = True
     assert await flt(same) is True
     assert await flt(other) is False
 
@@ -581,7 +622,7 @@ async def test_group_pending_other_user_still_reaches_natural_text(monkeypatch):
 
     monkeypatch.setattr(intent_router, "handle_intent_text", _fake_handle_intent_text)
     group_router._pending_new_trip_titles.clear()
-    group_router._pending_new_trip_titles[(777, 111)] = True
+    group_router._pending_new_trip_titles[(777, "user", 111)] = True
 
     msg = _DummyMessage("group", text="Трейв, 500 рублей такси", chat_id=777, user_id=222, bot=_Bot())
     msg.reply_to_message = None
