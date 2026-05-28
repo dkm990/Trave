@@ -66,6 +66,7 @@ class _FakeExtractor:
 
 def _settings(*, enabled: bool):
     return SimpleNamespace(
+        ai_provider="rule_based",
         enable_travel_intent_extractor=enabled,
         conversational_provider_order="mimo,gemini",
         mimo_api_key="mimo-key",
@@ -79,6 +80,8 @@ def _settings(*, enabled: bool):
         mimo_temperature=0.3,
         mimo_top_p=0.95,
         gemini_api_key="gemini-key",
+        gemini_model="gemini-2.5-flash",
+        gemini_timeout_seconds=8,
     )
 
 
@@ -803,3 +806,123 @@ async def test_weather_path_does_not_call_chat_provider(monkeypatch):
     assert ok is True
     assert weather_calls == ["Istanbul"]
     assert chat_called["value"] is False
+
+
+@pytest.mark.asyncio
+async def test_gemini_chat_works_when_ai_provider_is_rule_based(monkeypatch):
+    class _GeminiChat:
+        async def generate_chat_response(self, text, *, context="", trip_info=""):
+            return "time answer"
+
+    s = _settings(enabled=True)
+    s.ai_provider = "rule_based"
+    s.conversational_provider_order = "gemini"
+    s.mimo_api_key = ""
+    s.gemini_api_key = "gemini-key"
+
+    monkeypatch.setattr(intent_router, "get_settings", lambda: s)
+    monkeypatch.setattr(intent_router, "_build_gemini_chat_provider", lambda: _GeminiChat())
+
+    out = await intent_router._generate_conversational_response("какая разница во времени в Турции?")
+    assert out == "time answer"
+
+
+@pytest.mark.asyncio
+async def test_no_conversational_keys_returns_safe_fallback(monkeypatch, caplog):
+    s = _settings(enabled=True)
+    s.conversational_provider_order = "mimo,gemini"
+    s.mimo_api_key = ""
+    s.gemini_api_key = ""
+    monkeypatch.setattr(intent_router, "get_settings", lambda: s)
+
+    with caplog.at_level(logging.WARNING):
+        out = await intent_router._generate_conversational_response("какая разница во времени в Турции?")
+
+    assert out == intent_router.CHAT_SAFE_FALLBACK
+    log_text = "\n".join(rec.getMessage() for rec in caplog.records)
+    assert "status=no_configured_providers" in log_text
+
+
+@pytest.mark.asyncio
+async def test_empty_chat_provider_response_returns_safe_fallback(monkeypatch):
+    async def _mimo(text, *, context="", trip_info=""):
+        return "   "
+
+    s = _settings(enabled=True)
+    s.conversational_provider_order = "mimo"
+    monkeypatch.setattr(intent_router, "get_settings", lambda: s)
+    monkeypatch.setattr(intent_router, "_generate_mimo_chat_response", _mimo)
+
+    out = await intent_router._generate_conversational_response("какие esim лучше?")
+    assert out == intent_router.CHAT_SAFE_FALLBACK
+
+
+@pytest.mark.asyncio
+async def test_chat_provider_exception_returns_safe_fallback_and_logs(monkeypatch, caplog):
+    async def _mimo(text, *, context="", trip_info=""):
+        raise RuntimeError("boom")
+
+    s = _settings(enabled=True)
+    s.conversational_provider_order = "mimo"
+    monkeypatch.setattr(intent_router, "get_settings", lambda: s)
+    monkeypatch.setattr(intent_router, "_generate_mimo_chat_response", _mimo)
+
+    with caplog.at_level(logging.WARNING):
+        out = await intent_router._generate_conversational_response("какие esim лучше?")
+
+    assert out == intent_router.CHAT_SAFE_FALLBACK
+    log_text = "\n".join(rec.getMessage() for rec in caplog.records)
+    assert "status=error" in log_text
+    assert "RuntimeError" in log_text
+
+
+@pytest.mark.asyncio
+async def test_time_difference_question_routes_to_direct_chat_not_expense(monkeypatch):
+    called = {"chat": False, "expense": False}
+
+    async def _fake_chat_response(message, text, send):
+        called["chat"] = True
+        await send("chat")
+
+    async def _fake_propose(message, intent, *, source, use_reply=False):
+        called["expense"] = True
+
+    monkeypatch.setattr(intent_router, "get_settings", lambda: _settings(enabled=True))
+    monkeypatch.setattr(intent_router, "_chat_response", _fake_chat_response)
+    monkeypatch.setattr("app.bot.handlers.expenses.propose_expense_from_intent", _fake_propose)
+
+    msg = _DummyMessage(
+        "\u0422\u0440\u0435\u0439\u0432, \u043a\u0430\u043a\u0430\u044f \u0440\u0430\u0437\u043d\u0438\u0446\u0430 \u0432\u043e \u0432\u0440\u0435\u043c\u0435\u043d\u0438 \u0432 \u0442\u0443\u0440\u0446\u0438\u0438",
+        chat_type="group",
+    )
+    ok = await intent_router.handle_intent_text(msg, msg.text, source="trigger", use_reply=True)
+    assert ok is True
+    assert called == {"chat": True, "expense": False}
+
+
+@pytest.mark.asyncio
+async def test_expense_message_with_trigger_still_routes_to_expense_parser(monkeypatch):
+    calls: list[str] = []
+
+    async def _fake_propose(message, intent, *, source, use_reply=False):
+        calls.append(intent.action)
+
+    class _NeverCalledExtractor:
+        async def extract(self, *args, **kwargs):
+            raise AssertionError("extractor should not be called for expense-like text")
+
+    async def _chat_should_not_run(*args, **kwargs):
+        raise AssertionError("chat response should not be called for expense-like text")
+
+    monkeypatch.setattr(intent_router, "get_settings", lambda: _settings(enabled=True))
+    monkeypatch.setattr(intent_router, "get_travel_intent_service", lambda: _NeverCalledExtractor())
+    monkeypatch.setattr(intent_router, "_chat_response", _chat_should_not_run)
+    monkeypatch.setattr("app.bot.handlers.expenses.propose_expense_from_intent", _fake_propose)
+
+    msg = _DummyMessage(
+        "\u0422\u0440\u0435\u0439\u0432, 500 RUB \u0442\u0430\u043a\u0441\u0438",
+        chat_type="group",
+    )
+    ok = await intent_router.handle_intent_text(msg, msg.text, source="trigger", use_reply=True)
+    assert ok is True
+    assert calls == ["add_expense"]
