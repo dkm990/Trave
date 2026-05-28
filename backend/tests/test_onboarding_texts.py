@@ -325,7 +325,7 @@ async def test_group_newtrip_without_title_asks_for_title():
     await group_router.group_new_trip(msg)
 
     assert msg.answers == [(group_router.NEW_TRIP_PROMPT, None)]
-    assert group_router._pending_new_trip_titles.get((101, "user", 501)) is True
+    assert group_router._pending_new_trip_titles.get((101, 501)) is True
 
 
 @pytest.mark.asyncio
@@ -359,20 +359,8 @@ async def test_group_pending_title_same_user_creates_trip(monkeypatch):
     await group_router.group_new_trip_title_input(title_msg)
 
     assert created == [("Армения", 101)]
-    assert (101, "user", 501) not in group_router._pending_new_trip_titles
+    assert (101, 501) not in group_router._pending_new_trip_titles
     assert "Поездка <b>Армения</b> создана." in title_msg.answers[0][0]
-
-
-@pytest.mark.asyncio
-async def test_group_newtrip_requires_non_anonymous_user():
-    from app.bot.handlers import group_router
-
-    group_router._pending_new_trip_titles.clear()
-
-    msg = _DummyMessage("group", text="/newtrip", chat_id=101, user_id=None, sender_chat_id=-9001)
-    await group_router.group_new_trip(msg)
-    assert msg.answers == [(group_router.NEW_TRIP_USER_REQUIRED_TEXT, None)]
-    assert group_router._pending_new_trip_titles == {}
 
 
 @pytest.mark.asyncio
@@ -408,7 +396,7 @@ async def test_group_pending_title_other_user_does_not_create_trip(monkeypatch):
 
     assert created == []
     assert other_msg.answers == []
-    assert group_router._pending_new_trip_titles.get((101, "user", 501)) is True
+    assert group_router._pending_new_trip_titles.get((101, 501)) is True
 
 
 @pytest.mark.asyncio
@@ -422,7 +410,7 @@ async def test_group_cancel_clears_pending_newtrip():
     await group_router.group_cancel_new_trip(cancel_msg)
 
     assert cancel_msg.answers == [(group_router.NEW_TRIP_CANCELLED_TEXT, None)]
-    assert (101, "user", 501) not in group_router._pending_new_trip_titles
+    assert (101, 501) not in group_router._pending_new_trip_titles
 
 
 @pytest.mark.asyncio
@@ -455,7 +443,7 @@ async def test_group_newtrip_with_title_creates_immediately(monkeypatch):
     await group_router.group_new_trip(msg)
 
     assert created == [("Армения", 102)]
-    assert (102, "user", 502) not in group_router._pending_new_trip_titles
+    assert (102, 502) not in group_router._pending_new_trip_titles
     assert "Поездка <b>Армения</b> создана." in msg.answers[0][0]
 
 
@@ -504,7 +492,7 @@ async def test_commands_during_pending_are_not_treated_as_trip_title(monkeypatch
 
     assert created == []
     assert command_msg.answers == []
-    assert group_router._pending_new_trip_titles.get((103, "user", 503)) is True
+    assert group_router._pending_new_trip_titles.get((103, 503)) is True
 
 
 @pytest.mark.asyncio
@@ -517,24 +505,21 @@ async def test_group_pending_filter_matches_only_same_user_pending():
     other = _DummyMessage("group", text="Армения", chat_id=555, user_id=778)
 
     assert await flt(same) is False
-    group_router._pending_new_trip_titles[(555, "user", 777)] = True
+    group_router._pending_new_trip_titles[(555, 777)] = True
     assert await flt(same) is True
     assert await flt(other) is False
 
 
 @pytest.mark.asyncio
-async def test_group_pending_filter_supports_sender_chat_key():
+async def test_group_pending_filter_does_not_match_anonymous_user():
     from app.bot.handlers import group_router
 
     group_router._pending_new_trip_titles.clear()
     flt = group_router.PendingNewTripTitleFilter()
-    same = _DummyMessage("group", text="Вьетнам", chat_id=555, user_id=None, sender_chat_id=-444)
-    other = _DummyMessage("group", text="Вьетнам", chat_id=555, user_id=None, sender_chat_id=-445)
+    anon = _DummyMessage("group", text="Вьетнам", chat_id=555, user_id=None, sender_chat_id=-444)
 
-    assert await flt(same) is False
-    group_router._pending_new_trip_titles[(555, "sender_chat", -444)] = True
-    assert await flt(same) is True
-    assert await flt(other) is False
+    group_router._pending_new_trip_titles[(555, 777)] = True
+    assert await flt(anon) is False
 
 
 @pytest.mark.asyncio
@@ -622,7 +607,7 @@ async def test_group_pending_other_user_still_reaches_natural_text(monkeypatch):
 
     monkeypatch.setattr(intent_router, "handle_intent_text", _fake_handle_intent_text)
     group_router._pending_new_trip_titles.clear()
-    group_router._pending_new_trip_titles[(777, "user", 111)] = True
+    group_router._pending_new_trip_titles[(777, 111)] = True
 
     msg = _DummyMessage("group", text="Трейв, 500 рублей такси", chat_id=777, user_id=222, bot=_Bot())
     msg.reply_to_message = None
@@ -642,3 +627,157 @@ async def test_private_pending_filter_does_not_match_without_state():
     flt = private_router.PendingNewTripTitleFilter()
     msg = _DummyMessage("private", text="просто текст", chat_id=900, user_id=901)
     assert await flt(msg) is False
+
+
+@pytest.mark.asyncio
+async def test_trip_service_create_trip_sets_currency_defaults():
+    from app.database import Base, get_engine, get_session_factory
+    from app.models.user import User
+    from app.services.trip_service import TripService
+
+    engine = get_engine()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    factory = get_session_factory()
+    async with factory() as session:
+        user = User(telegram_user_id=111, username="test", first_name="T", last_name="S")
+        session.add(user)
+        await session.flush()
+
+        svc = TripService(session)
+        trip = await svc.create_trip(title="Вьетнам", owner=user, telegram_chat_id=-5137657489)
+
+        assert trip.default_currency == "RUB"
+        assert trip.trip_currency == "RUB"
+        assert trip.trip_currency is not None
+
+
+@pytest.mark.asyncio
+async def test_trip_service_create_trip_propagates_custom_currency():
+    from app.database import Base, get_engine, get_session_factory
+    from app.models.user import User
+    from app.services.trip_service import TripService
+
+    engine = get_engine()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    factory = get_session_factory()
+    async with factory() as session:
+        user = User(telegram_user_id=222, username="test2", first_name="T2", last_name="S2")
+        session.add(user)
+        await session.flush()
+
+        svc = TripService(session)
+        trip = await svc.create_trip(title="Турция", owner=user, default_currency="TRY")
+
+        assert trip.default_currency == "TRY"
+        assert trip.trip_currency == "TRY"
+
+
+@pytest.mark.asyncio
+async def test_trip_service_create_trip_explicit_trip_currency_overrides():
+    from app.database import Base, get_engine, get_session_factory
+    from app.models.user import User
+    from app.services.trip_service import TripService
+
+    engine = get_engine()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    factory = get_session_factory()
+    async with factory() as session:
+        user = User(telegram_user_id=333, username="test3", first_name="T3", last_name="S3")
+        session.add(user)
+        await session.flush()
+
+        svc = TripService(session)
+        trip = await svc.create_trip(
+            title="Грузия", owner=user, default_currency="GEL", trip_currency="USD",
+        )
+
+        assert trip.default_currency == "GEL"
+        assert trip.trip_currency == "USD"
+
+
+@pytest.mark.asyncio
+async def test_trip_service_create_trip_fallback_when_none():
+    from app.database import Base, get_engine, get_session_factory
+    from app.models.user import User
+    from app.services.trip_service import TripService
+
+    engine = get_engine()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    factory = get_session_factory()
+    async with factory() as session:
+        user = User(telegram_user_id=444, username="test4", first_name="T4", last_name="S4")
+        session.add(user)
+        await session.flush()
+
+        svc = TripService(session)
+        trip = await svc.create_trip(
+            title="Test", owner=user, default_currency=None, trip_currency=None,
+        )
+
+        assert trip.default_currency == "RUB"
+        assert trip.trip_currency == "RUB"
+
+
+@pytest.mark.asyncio
+async def test_trip_service_create_trip_adds_owner_as_member():
+    from app.database import Base, get_engine, get_session_factory
+    from app.models.user import User
+    from app.services.trip_service import TripService
+
+    engine = get_engine()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    factory = get_session_factory()
+    async with factory() as session:
+        user = User(telegram_user_id=555, username="test5", first_name="T5", last_name="S5")
+        session.add(user)
+        await session.flush()
+
+        svc = TripService(session)
+        trip = await svc.create_trip(title="Армения", owner=user, telegram_chat_id=-100)
+
+        members = await svc.get_members(trip.id)
+        assert len(members) == 1
+        assert members[0].user_id == user.id
+        assert members[0].role == "owner"
+
+
+@pytest.mark.asyncio
+async def test_group_newtrip_create_error_responds_and_clears_pending(monkeypatch):
+    from app.bot.handlers import group_router
+
+    class _UserService:
+        def __init__(self, session):
+            pass
+
+        async def get_or_create(self, **kwargs):
+            return SimpleNamespace(id=77)
+
+    class _TripService:
+        def __init__(self, session):
+            pass
+
+        async def create_trip(self, **kwargs):
+            raise RuntimeError("DB failure")
+
+    monkeypatch.setattr(group_router, "session_scope", lambda: _DummyScope())
+    monkeypatch.setattr(group_router, "UserService", _UserService)
+    monkeypatch.setattr(group_router, "TripService", _TripService)
+    group_router._pending_new_trip_titles.clear()
+
+    await group_router.group_new_trip(_DummyMessage("group", text="/newtrip", chat_id=101, user_id=501))
+    title_msg = _DummyMessage("group", text="Вьетнам", chat_id=101, user_id=501)
+    await group_router.group_new_trip_title_input(title_msg)
+
+    assert len(title_msg.answers) == 1
+    assert "не получилось" in title_msg.answers[0][0].lower()
+    assert (101, 501) not in group_router._pending_new_trip_titles

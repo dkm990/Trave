@@ -33,17 +33,15 @@ NEW_TRIP_CANCELLED_TEXT = "Ок, создание поездки отменен�
 NEW_TRIP_EMPTY_TITLE_TEXT = "Название не должно быть пустым. Напишите название поездки или /cancel."
 NEW_TRIP_LONG_TITLE_TEXT = f"Название слишком длинное. Максимум {MAX_TRIP_TITLE_LENGTH} символов."
 
-NEW_TRIP_USER_REQUIRED_TEXT = "Не вижу ваш пользовательский профиль в этом сообщении. Отправьте команду не анонимно и повторите /newtrip."
+NEW_TRIP_CREATE_ERROR_TEXT = "Сейчас не получилось создать поездку, попробуйте ещё раз."
 
-_pending_new_trip_titles: dict[tuple[int, str, int], bool] = {}
+_pending_new_trip_titles: dict[tuple[int, int], bool] = {}
 
 
-def _pending_new_trip_key(message: Message) -> tuple[int, str, int] | None:
-    if message.from_user:
-        return (message.chat.id, "user", message.from_user.id)
-    if message.sender_chat:
-        return (message.chat.id, "sender_chat", message.sender_chat.id)
-    return None
+def _pending_new_trip_key(message: Message) -> tuple[int, int] | None:
+    if not message.from_user:
+        return None
+    return (message.chat.id, message.from_user.id)
 
 
 class PendingNewTripTitleFilter(Filter):
@@ -188,10 +186,6 @@ router.message.middleware(GroupMessageSaver())
 
 @router.message(Command("newtrip"))
 async def group_new_trip(message: Message):
-    if not message.from_user:
-        await message.answer(NEW_TRIP_USER_REQUIRED_TEXT)
-        return
-
     provided = (message.text or "").partition(" ")[2]
     key = _pending_new_trip_key(message)
     if not provided.strip():
@@ -205,18 +199,28 @@ async def group_new_trip(message: Message):
         await message.answer(error_text)
         return
 
-    async with session_scope() as session:
-        user = await UserService(session).get_or_create(
-            telegram_user_id=message.from_user.id,
-            username=message.from_user.username,
-            first_name=message.from_user.first_name,
-            last_name=message.from_user.last_name,
+    try:
+        async with session_scope() as session:
+            user = await UserService(session).get_or_create(
+                telegram_user_id=message.from_user.id,
+                username=message.from_user.username,
+                first_name=message.from_user.first_name,
+                last_name=message.from_user.last_name,
+            )
+            trip = await TripService(session).create_trip(
+                title=title,
+                owner=user,
+                telegram_chat_id=message.chat.id,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "group_new_trip create failed chat=%s user=%s type=%s",
+            message.chat.id,
+            message.from_user.id if message.from_user else None,
+            type(exc).__name__,
         )
-        trip = await TripService(session).create_trip(
-            title=title,
-            owner=user,
-            telegram_chat_id=message.chat.id,
-        )
+        await message.answer(NEW_TRIP_CREATE_ERROR_TEXT)
+        return
     if key:
         _pending_new_trip_titles.pop(key, None)
     await message.answer(_group_trip_created_text(trip.title))
@@ -356,10 +360,6 @@ async def group_balance(message: Message):
 
 @router.message(PendingNewTripTitleFilter(), F.text)
 async def group_new_trip_title_input(message: Message):
-    if not message.from_user:
-        await message.answer(NEW_TRIP_USER_REQUIRED_TEXT)
-        return
-
     key = _pending_new_trip_key(message)
     if not key:
         return
@@ -373,18 +373,29 @@ async def group_new_trip_title_input(message: Message):
         await message.answer(error_text)
         return
 
-    async with session_scope() as session:
-        user = await UserService(session).get_or_create(
-            telegram_user_id=message.from_user.id,
-            username=message.from_user.username,
-            first_name=message.from_user.first_name,
-            last_name=message.from_user.last_name,
+    try:
+        async with session_scope() as session:
+            user = await UserService(session).get_or_create(
+                telegram_user_id=message.from_user.id,
+                username=message.from_user.username,
+                first_name=message.from_user.first_name,
+                last_name=message.from_user.last_name,
+            )
+            trip = await TripService(session).create_trip(
+                title=title,
+                owner=user,
+                telegram_chat_id=message.chat.id,
+            )
+    except Exception as exc:  # noqa: BLE001
+        _pending_new_trip_titles.pop(key, None)
+        logger.warning(
+            "group_new_trip_title_input create failed chat=%s user=%s type=%s",
+            message.chat.id,
+            message.from_user.id if message.from_user else None,
+            type(exc).__name__,
         )
-        trip = await TripService(session).create_trip(
-            title=title,
-            owner=user,
-            telegram_chat_id=message.chat.id,
-        )
+        await message.answer(NEW_TRIP_CREATE_ERROR_TEXT)
+        return
 
     _pending_new_trip_titles.pop(key, None)
     await message.answer(_group_trip_created_text(trip.title))

@@ -21,6 +21,7 @@ class Trip(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     title: Mapped[str] = mapped_column(String(200))
+    trip_currency: Mapped[str] = mapped_column(String(8), default="RUB")
     default_currency: Mapped[str] = mapped_column(String(8), default="RUB")
     local_currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
     created_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))

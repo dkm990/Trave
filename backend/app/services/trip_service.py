@@ -19,11 +19,15 @@ class TripService:
         title: str,
         owner: User,
         default_currency: str = "RUB",
+        trip_currency: str | None = None,
         telegram_chat_id: Optional[int] = None,
     ) -> Trip:
+        resolved_default_currency = (default_currency or "RUB").upper()
+        resolved_trip_currency = (trip_currency or resolved_default_currency or "RUB").upper()
         trip = Trip(
             title=title.strip(),
-            default_currency=default_currency.upper(),
+            default_currency=resolved_default_currency,
+            trip_currency=resolved_trip_currency,
             created_by_user_id=owner.id,
             telegram_chat_id=telegram_chat_id,
         )
