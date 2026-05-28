@@ -265,7 +265,11 @@ async def propose_expense_from_intent(
 
     title = payload.get("title", "Расход")
     amount = payload["amount"]
-    currency = payload.get("currency") or trip.default_currency or "RUB"
+    currency = payload.get("currency") or trip.default_currency
+    if not currency:
+        await send("Не удалось определить валюту поездки. Укажи валюту расхода явно.")
+        return
+    currency = currency.upper()
     category = payload.get("category")
 
     # --- неровное деление: разрешаем имена в custom_shares ---

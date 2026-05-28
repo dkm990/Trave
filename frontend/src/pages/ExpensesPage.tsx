@@ -109,7 +109,7 @@ export function ExpensesPage() {
     e.preventDefault();
     if (!tripId || !payer || !amount || !title.trim() || !participants.length) return;
 
-    const effectiveCurrency = currency || trip?.default_currency || "RUB";
+    const effectiveCurrency = currency || trip?.default_currency;
     if (!effectiveCurrency) {
       setError("Валюта не выбрана");
       return;

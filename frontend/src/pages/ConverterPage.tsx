@@ -71,7 +71,7 @@ export function ConverterPage() {
       try {
         const t = await api<Trip>(`/api/trips/${tripId}`);
         setTrip(t);
-        const base = t.local_currency || t.default_currency || "RUB";
+        const base = t.local_currency || t.default_currency;
         setActiveCurrency(base);
         setAmounts({ [base]: "1000" });
         const q = await api<QuickCurrenciesResponse>(`/api/currency/trip/${tripId}/quick`);

@@ -666,7 +666,7 @@ async def test_trip_service_create_trip_explicit_trip_currency_overrides():
 
 
 @pytest.mark.asyncio
-async def test_trip_service_create_trip_fallback_when_none():
+async def test_trip_service_create_trip_uses_param_default():
     from app.database import Base, get_engine, get_session_factory
     from app.models.user import User
     from app.services.trip_service import TripService
@@ -682,12 +682,33 @@ async def test_trip_service_create_trip_fallback_when_none():
         await session.flush()
 
         svc = TripService(session)
-        trip = await svc.create_trip(
-            title="Test", owner=user, default_currency=None, trip_currency=None,
-        )
+        trip = await svc.create_trip(title="Test", owner=user)
 
         assert trip.default_currency == "RUB"
         assert trip.trip_currency == "RUB"
+
+
+@pytest.mark.asyncio
+async def test_trip_service_create_trip_none_currency_raises():
+    from app.database import Base, get_engine, get_session_factory
+    from app.models.user import User
+    from app.services.trip_service import TripService
+
+    engine = get_engine()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    factory = get_session_factory()
+    async with factory() as session:
+        user = User(telegram_user_id=445, username="test4b", first_name="T4b", last_name="S4b")
+        session.add(user)
+        await session.flush()
+
+        svc = TripService(session)
+        with pytest.raises(AttributeError):
+            await svc.create_trip(
+                title="Test", owner=user, default_currency=None, trip_currency=None,
+            )
 
 
 @pytest.mark.asyncio

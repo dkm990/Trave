@@ -155,7 +155,9 @@ class ExpenseService:
             await self.session.execute(select(Trip).where(Trip.id == payload.trip_id))
         ).scalar_one()
 
-        effective_currency = (payload.currency or trip.default_currency or "RUB").upper()
+        effective_currency = (payload.currency or trip.default_currency).upper()
+        if not effective_currency:
+            raise ValueError(f"Trip {trip.id} has no default_currency and no currency was provided")
 
         raw_base, rate_info = await self.currency.convert(
             payload.amount, effective_currency, trip.default_currency

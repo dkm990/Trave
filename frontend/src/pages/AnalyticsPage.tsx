@@ -35,7 +35,7 @@ export function AnalyticsPage() {
 
   if (error) return <div className="error">{error}</div>;
 
-  const display = data?.display_currency || "RUB";
+  const display = data?.display_currency || data?.trip?.default_currency || "";
   const maxCat = data ? Math.max(...data.by_category.map((c) => Number(c.amount_display)), 0) : 0;
   const maxPayer = data ? Math.max(...data.by_payer.map((p) => Number(p.amount_display ?? 0)), 0) : 0;
   const maxPart = data ? Math.max(...data.by_participant.map((p) => Number(p.share_display ?? 0)), 0) : 0;

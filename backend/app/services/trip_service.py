@@ -22,12 +22,11 @@ class TripService:
         trip_currency: str | None = None,
         telegram_chat_id: Optional[int] = None,
     ) -> Trip:
-        resolved_trip_currency = (trip_currency or default_currency or "RUB").upper()
-        resolved_default_currency = resolved_trip_currency
+        resolved = (trip_currency or default_currency).upper()
         trip = Trip(
             title=title.strip(),
-            default_currency=resolved_default_currency,
-            trip_currency=resolved_trip_currency,
+            default_currency=resolved,
+            trip_currency=resolved,
             created_by_user_id=owner.id,
             telegram_chat_id=telegram_chat_id,
         )
@@ -137,6 +136,7 @@ class TripService:
 
     async def set_default_currency(self, trip: Trip, currency: str) -> Trip:
         trip.default_currency = currency.upper()
+        trip.trip_currency = currency.upper()
         await self.session.flush()
         return trip
 
